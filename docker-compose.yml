@@ -1,0 +1,41 @@
+# Optional local infra. Default path uses SQLite files under data/db/ (no Docker required).
+#
+#   docker compose up -d postgres
+#   export DATABASE_URL=postgresql://cropmerge:cropmerge@127.0.0.1:5432/cropmerge
+#   export VISION_DATABASE_URL=postgresql://cropmerge:cropmerge@127.0.0.1:5432/cropmerge_vision
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cropmerge-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: cropmerge
+      POSTGRES_PASSWORD: cropmerge
+      POSTGRES_DB: cropmerge
+    volumes:
+      - cropmerge_pg:/var/lib/postgresql/data
+      - ./tooling/db/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cropmerge -d cropmerge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Lightweight admin UI (optional)
+  adminer:
+    image: adminer:4
+    container_name: cropmerge-adminer
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+volumes:
+  cropmerge_pg:
