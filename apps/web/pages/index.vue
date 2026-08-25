@@ -33,6 +33,10 @@ const mediaTab = ref<'video' | 'heatmap' | 'montage' | 'frames'>('video')
 const selectedZoneId = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const frameSectionEl = ref<HTMLElement | null>(null)
+const uploadProgress = ref<number | null>(null)
+const activeUploadId = ref<string | null>(null)
+const abortController = ref<AbortController | null>(null)
+const { request } = useVisionApi()
 
 function scrollToFrames() {
   mediaTab.value = 'frames'
@@ -57,7 +61,8 @@ onMounted(async () => {
 
 async function refreshHealth() {
   try {
-    health.value = await $fetch<Health>('/api/health')
+    const vision = await request<NonNullable<Health['vision']>>('/vision/health', {}, false)
+    health.value = { ok: vision.status === 'ok', vision }
   } catch {
     health.value = { ok: false, error: 'Health check failed' }
   }
@@ -65,7 +70,15 @@ async function refreshHealth() {
 
 async function refreshRecent() {
   try {
-    recent.value = await $fetch<RecentJob[]>('/api/analyses')
+    const response = await request<{ analyses: AnalysisJob[] }>('/vision/analyses')
+    recent.value = response.analyses.map((analysis) => ({
+      id: analysis.id,
+      status: analysis.status,
+      createdAt: analysis.createdAt,
+      filename: analysis.filename,
+      zoneCount: analysis.report?.inspectionZones.length,
+      fieldDetected: analysis.report?.field.detected,
+    }))
   } catch {
     recent.value = []
   }
@@ -106,8 +119,7 @@ function pct(n: number | undefined) {
 }
 
 function artifactUrl(name: string) {
-  const id = report.value?.runId
-  return id ? `/api/artifacts/${id}/${name}` : ''
+  return job.value?.artifactUrls?.[name] || ''
 }
 
 function formatBytes(n: number) {
@@ -213,6 +225,83 @@ async function useSample(sample: (typeof SAMPLE_INPUTS)[number]) {
   }
 }
 
+type UploadResponse = {
+  uploadId: string
+  status: string
+  size: number
+}
+
+type UploadInitResponse = {
+  uploadId: string
+  chunkSize: number
+  totalChunks: number
+}
+
+async function uploadFile(input: File, signal: AbortSignal): Promise<string> {
+  const configuredThreshold = Number(useRuntimeConfig().public.visionSmallUploadThresholdBytes)
+  if (input.size <= configuredThreshold) {
+    uploadProgress.value = 0.05
+    const body = new FormData()
+    body.append('file', input)
+    const uploaded = await request<UploadResponse>('/vision/uploads', {
+      method: 'POST',
+      body,
+      signal,
+    })
+    uploadProgress.value = 1
+    return uploaded.uploadId
+  }
+
+  const initialized = await request<UploadInitResponse>('/vision/uploads/init', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ filename: input.name, size: input.size, contentType: input.type || undefined }),
+    signal,
+  })
+  activeUploadId.value = initialized.uploadId
+
+  for (let index = 0; index < initialized.totalChunks; index += 1) {
+    const start = index * initialized.chunkSize
+    const chunk = input.slice(start, Math.min(start + initialized.chunkSize, input.size))
+    await request<void>(`/vision/uploads/${initialized.uploadId}/chunks/${index}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: chunk,
+      signal,
+    })
+    uploadProgress.value = (index + 1) / initialized.totalChunks
+  }
+
+  const completed = await request<UploadResponse>(`/vision/uploads/${initialized.uploadId}/complete`, {
+    method: 'POST',
+    signal,
+  })
+  return completed.uploadId
+}
+
+async function waitForAnalysis(id: string, signal: AbortSignal) {
+  while (!signal.aborted) {
+    const current = await request<AnalysisJob>(`/vision/analyses/${id}`, { signal })
+    job.value = current
+    if (current.status === 'completed') return current
+    if (current.status === 'failed' || current.status === 'cancelled') {
+      throw new Error(current.error || current.message || 'Analysis did not complete')
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(resolve, 1500)
+      signal.addEventListener(
+        'abort',
+        () => {
+          window.clearTimeout(timer)
+          reject(new DOMException('Request aborted', 'AbortError'))
+        },
+        { once: true },
+      )
+    })
+  }
+  throw new DOMException('Request aborted', 'AbortError')
+}
+
 async function analyze() {
   if (!file.value) {
     error.value = 'Choose a drone video or field image first.'
@@ -225,26 +314,39 @@ async function analyze() {
   loading.value = true
   error.value = ''
   job.value = null
+  uploadProgress.value = 0
+  activeUploadId.value = null
+  abortController.value = new AbortController()
   mediaTab.value = isImageUpload.value ? 'heatmap' : 'video'
   try {
-    const body = new FormData()
-    body.append('file', file.value)
-    body.append('sampleFps', '2')
-    // Images are repeated across a few synthetic timestamps so temporal
-    // persistence (min ~3 frames) can still form inspection zones.
-    body.append('maxFrames', isImageUpload.value ? '3' : '40')
-    body.append('skipDino', 'false')
-    body.append(
-      'segmentationBackend',
-      health.value?.vision?.segmentationBackend || 'heuristic',
-    )
-    job.value = await $fetch<AnalysisJob>('/api/analyses', { method: 'POST', body })
+    const uploadId = await uploadFile(file.value, abortController.value.signal)
+    activeUploadId.value = null
+    job.value = await request<AnalysisJob>('/vision/analyses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        uploadId,
+        sampleFps: 2,
+        // Images are repeated across a few synthetic timestamps so temporal
+        // persistence (min ~3 frames) can still form inspection zones.
+        maxFrames: isImageUpload.value ? 3 : 40,
+        skipDino: false,
+        segmentationBackend: health.value?.vision?.segmentationBackend || 'heuristic',
+        dinoBackend: health.value?.vision?.dinoBackend || 'heuristic',
+      }),
+      signal: abortController.value.signal,
+    })
+    await waitForAnalysis(job.value.id, abortController.value.signal)
     await refreshRecent()
   } catch (e: unknown) {
-    const err = e as { data?: { statusMessage?: string }; message?: string }
-    error.value = err?.data?.statusMessage || err?.message || String(e)
+    if ((e as { name?: string }).name !== 'AbortError') {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
   } finally {
     loading.value = false
+    uploadProgress.value = null
+    activeUploadId.value = null
+    abortController.value = null
   }
 }
 
@@ -252,7 +354,7 @@ async function openRecent(id: string) {
   error.value = ''
   loading.value = true
   try {
-    job.value = await $fetch<AnalysisJob>(`/api/analyses/${id}`)
+    job.value = await request<AnalysisJob>(`/vision/analyses/${id}`)
     mediaTab.value = 'video'
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -261,7 +363,20 @@ async function openRecent(id: string) {
   }
 }
 
+async function cancelUpload() {
+  abortController.value?.abort()
+  const uploadId = activeUploadId.value
+  if (uploadId) {
+    try {
+      await request<void>(`/vision/uploads/${uploadId}`, { method: 'DELETE' })
+    } catch {
+      // The canceled browser request may have already removed the partial upload.
+    }
+  }
+}
+
 function reset() {
+  void cancelUpload()
   job.value = null
   file.value = null
   selectedZoneId.value = null
@@ -447,7 +562,11 @@ const mediaSrc = computed(() => {
       <div class="spinner" aria-hidden="true" />
       <h2 class="upload-title" style="margin-bottom: 0.35rem">Analyzing field flight</h2>
       <p class="muted" style="margin: 0">
-        Sampling frames, segmenting regions, scoring visual variation, building inspection zones…
+        {{
+          uploadProgress != null && uploadProgress < 1
+            ? `Uploading directly to the vision server · ${Math.round(uploadProgress * 100)}%`
+            : job?.message || 'Sampling frames, segmenting regions, scoring visual variation, building inspection zones…'
+        }}
       </p>
       <div class="progress-track" aria-hidden="true"><i /></div>
       <div class="pipeline" style="justify-content: center">
@@ -456,6 +575,15 @@ const mediaSrc = computed(() => {
           {{ step }}
         </span>
       </div>
+      <button
+        v-if="activeUploadId"
+        type="button"
+        class="btn btn-ghost btn-sm"
+        style="margin-top: 1rem"
+        @click="cancelUpload"
+      >
+        Cancel upload
+      </button>
     </div>
 
     <!-- Results -->
@@ -690,6 +818,7 @@ const mediaSrc = computed(() => {
           v-if="report.runId"
           :run-id="report.runId"
           :frames="report.frameQuality || []"
+          :artifact-urls="job?.artifactUrls || {}"
           :frames-sampled="report.analysis.framesSampled"
           :focus-timestamp-sec="selectedZone?.firstSeenSec ?? null"
         />

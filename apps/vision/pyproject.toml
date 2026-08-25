@@ -14,6 +14,7 @@ dependencies = [
   "Pillow>=10.2",
   "pydantic>=2.6",
   "pydantic-settings>=2.2",
+  "PyJWT>=2.10,<3",
   "PyYAML>=6.0",
   "scikit-learn>=1.4",
   "scipy>=1.12",

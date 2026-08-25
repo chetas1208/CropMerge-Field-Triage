@@ -1,6 +1,6 @@
 # CropMerge Vision Engine
 
-Internal Python CV service. **Not** the product UI.
+Python CV service. **Not** the product UI.
 
 Owns: decode, quality, segmentation, DINO/RGB features, anomaly, temporal consensus, artifacts.
 
@@ -18,7 +18,9 @@ python scripts/analyze_video.py \
   --output ../../outputs/demo \
   --segmentation-backend heuristic
 pytest -v
-uvicorn api.main:app --port 8001
+export VISION_SHARED_SECRET='replace-with-a-random-32-byte-secret'
+export VISION_CORS_ORIGINS=http://localhost:3000
+uvicorn api.main:app --host 127.0.0.1 --port 8001
 ```
 
 ## Backends
@@ -34,6 +36,11 @@ Fallback outputs always set `usedFallback` / `is_fallback` — never claimed as 
 ## API
 
 - `GET /vision/health`
-- `POST /vision/analyze` (multipart file)
-- `POST /vision/segment`
-- `GET /vision/artifacts/{run_id}/{name}`
+- `POST /vision/uploads` (small direct multipart upload)
+- `POST /vision/uploads/init`, `PUT /vision/uploads/{id}/chunks/{index}`, `POST /vision/uploads/{id}/complete` (resumable upload)
+- `POST /vision/analyses` (returns `202 Accepted`)
+- `GET /vision/analyses/{id}` (poll job and receive signed artifact URLs)
+- `GET /vision/artifacts/{run_id}/{name}?token=...` (direct, range-capable artifact streaming)
+- `POST /vision/segment` (authenticated debug endpoint)
+
+`GET /vision/health` remains public and performs no media decode or inference. All other endpoints require a 15-minute HS256 bearer token minted by Nuxt's private `POST /api/vision/session` endpoint. See the repository [deployment guide](../../docs/DEPLOYMENT.md).

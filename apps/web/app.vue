@@ -4,10 +4,12 @@ const health = ref<{
   db?: { ok?: boolean; mode?: string }
   vision?: { status?: string; device?: string; segmentationBackend?: string }
 } | null>(null)
+const { request } = useVisionApi()
 
 onMounted(async () => {
   try {
-    health.value = await $fetch('/api/health')
+    const vision = await request<NonNullable<typeof health.value>['vision']>('/vision/health', {}, false)
+    health.value = { ok: vision?.status === 'ok', vision }
   } catch {
     health.value = { ok: false }
   }

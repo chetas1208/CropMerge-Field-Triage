@@ -25,9 +25,12 @@ export type SemanticClass =
 
 export type AnalysisStatus =
   | 'queued'
+  | 'preparing'
   | 'processing'
+  | 'rendering'
   | 'completed'
   | 'failed'
+  | 'cancelled'
 
 export type SegmentationBackend = 'sam3' | 'heuristic' | 'mock'
 export type DinoBackend = 'dinov3' | 'heuristic' | 'mock'
@@ -146,10 +149,13 @@ export interface AnalysisJob {
   updatedAt: string
   filename: string
   progress: number
+  stage?: string | null
   message?: string
   error?: string
   report?: FieldTriageReport | null
   artifacts?: ArtifactPaths | null
+  /** Direct, short-lived URLs served by the vision host, never by Nuxt/Vercel. */
+  artifactUrls?: Record<string, string>
 }
 
 export interface CreateAnalysisRequest {

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadJob } from '../../../utils/db'
+import { requireLegacyLocalProxy } from '../../../utils/legacy-proxy'
 
 function listJpgs(dir: string | null | undefined): string[] {
   if (!dir || !existsSync(dir)) return []
@@ -14,6 +15,7 @@ function listJpgs(dir: string | null | undefined): string[] {
 }
 
 export default defineEventHandler((event) => {
+  requireLegacyLocalProxy()
   const id = getRouterParam(event, 'id')
   if (!id) throw createError({ statusCode: 400 })
   const job = loadJob(id)

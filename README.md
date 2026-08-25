@@ -5,8 +5,8 @@
 Product-shaped prototype for Midwest (Illinois) corn/soy context. Ordinary RGB (DJI Mini 2–class) footage in; structured inspection zones out. **Not** disease/nutrient/yield diagnosis.
 
 ```text
-Nuxt product app  ──typed contract──►  Python vision engine
- (UX, jobs, API)                       (SAM/DINO/CV only)
+Nuxt/Vercel product UI  ──small session token──►  Python vision engine
+Browser  ──direct uploads, jobs, artifacts──►  Cloudflare Tunnel ──► vision engine
 ```
 
 ## Architecture
@@ -89,6 +89,10 @@ Optional SAM2 / DINOv2 weights: see `apps/vision/scripts/download_weights.py`.
 # from repo root
 corepack enable && pnpm install
 export VISION_SERVICE_URL=http://127.0.0.1:8001
+export NUXT_PUBLIC_VISION_API_URL=http://127.0.0.1:8001
+export NUXT_VISION_SHARED_SECRET='replace-with-a-random-32-byte-secret'
+export VISION_SHARED_SECRET="$NUXT_VISION_SHARED_SECRET"
+export VISION_CORS_ORIGINS=http://localhost:3000
 export OUTPUTS_DIR=$PWD/outputs
 export UPLOADS_DIR=$PWD/data/uploads
 pnpm dev
@@ -111,26 +115,27 @@ In the UI: **Try a real sample** → **Analyze field**. Attribution: `/samples/S
 pnpm demo
 ```
 
-## Product API (Nuxt)
+## Browser-facing API (Vision)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/analyses` | Upload video, run analysis |
-| GET | `/api/analyses` | List jobs |
-| GET | `/api/analyses/:id` | Job + report |
-| GET | `/api/analyses/:id/zones` | Inspection zones |
-| GET | `/api/analyses/:id/frames` | Frame quality |
-| GET | `/api/analyses/:id/artifacts` | Artifact paths/URLs |
-| GET | `/api/artifacts/:runId/:name` | Serve file |
+| POST | `/vision/uploads` | Small direct multipart upload |
+| POST | `/vision/uploads/init` | Start a resumable chunked upload |
+| PUT | `/vision/uploads/:id/chunks/:index` | Upload one chunk |
+| POST | `/vision/uploads/:id/complete` | Atomically assemble upload |
+| POST | `/vision/analyses` | Queue analysis (`202 Accepted`) |
+| GET | `/vision/analyses/:id` | Job status, report, signed artifact URLs |
+| GET | `/vision/artifacts/:runId/:name` | Signed direct artifact download/stream |
 
-## Vision API (internal)
+`POST /api/vision/session` is the only Nuxt control-plane endpoint used by the deployed browser. The old `/api/analyses` and `/api/artifacts` routes are retained only behind `NUXT_ENABLE_LEGACY_LOCAL_PROXY=true`; they are disabled by default so Vercel never proxies media.
 
-| Method | Path |
-|--------|------|
-| GET | `/vision/health` |
-| POST | `/vision/analyze` |
-| POST | `/vision/segment` |
-| GET | `/vision/artifacts/{run_id}/{name}` |
+## Vision diagnostics
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/vision/health` | Lightweight public health check |
+| POST | `/vision/analyze` | Legacy, explicitly opt-in synchronous endpoint |
+| POST | `/vision/segment` | Authenticated debug segmentation |
 
 ## Model backends
 

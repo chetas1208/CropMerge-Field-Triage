@@ -7,6 +7,11 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
   css: ['~/assets/css/main.css'],
   runtimeConfig: {
+    // Kept private: only the Nuxt session endpoint reads this value.
+    visionSharedSecret: process.env.NUXT_VISION_SHARED_SECRET || '',
+    visionSessionOrigins: process.env.NUXT_VISION_SESSION_ORIGINS || '',
+    // Legacy server-side proxy settings. They are deliberately not used by the
+    // deployed UI; large media must go browser -> vision service directly.
     visionServiceUrl: process.env.VISION_SERVICE_URL || 'http://127.0.0.1:8001',
     outputsDir: process.env.OUTPUTS_DIR || `${root}/outputs`,
     uploadsDir: process.env.UPLOADS_DIR || `${root}/data/uploads`,
@@ -17,6 +22,10 @@ export default defineNuxtConfig({
       `sqlite:///${root}/data/db/cropmerge.sqlite`,
     public: {
       appName: process.env.NUXT_PUBLIC_APP_NAME || 'CropMerge Field Triage',
+      visionApiUrl: process.env.NUXT_PUBLIC_VISION_API_URL || 'http://127.0.0.1:8001',
+      visionSmallUploadThresholdBytes: Number(
+        process.env.NUXT_PUBLIC_VISION_SMALL_UPLOAD_THRESHOLD_BYTES || 24 * 1024 * 1024,
+      ),
     },
   },
   typescript: {

@@ -1,8 +1,10 @@
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { sendStream } from 'h3'
+import { requireLegacyLocalProxy } from '../../../utils/legacy-proxy'
 
 export default defineEventHandler((event) => {
+  requireLegacyLocalProxy()
   const runId = getRouterParam(event, 'runId')
   const nameParam = getRouterParam(event, 'name')
   // Nitro catch-all may be string or string[]
@@ -27,7 +29,7 @@ export default defineEventHandler((event) => {
   else if (lower.endsWith('.png')) setHeader(event, 'content-type', 'image/png')
   else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) setHeader(event, 'content-type', 'image/jpeg')
   else if (lower.endsWith('.mp4')) setHeader(event, 'content-type', 'video/mp4')
-  setHeader(event, 'content-length', String(st.size))
+  setHeader(event, 'content-length', st.size)
   setHeader(event, 'cache-control', 'public, max-age=3600')
   if (event.method === 'HEAD') {
     return null

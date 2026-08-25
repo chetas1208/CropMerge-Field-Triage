@@ -3,9 +3,11 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AnalysisJob } from '@cropmerge/types'
 import { saveJob } from '../../utils/db'
+import { requireLegacyLocalProxy } from '../../utils/legacy-proxy'
 import { visionAnalyze } from '../../utils/vision'
 
 export default defineEventHandler(async (event) => {
+  requireLegacyLocalProxy()
   const config = useRuntimeConfig()
   const form = await readMultipartFormData(event)
   if (!form) {

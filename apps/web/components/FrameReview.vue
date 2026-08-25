@@ -4,6 +4,8 @@ import type { FrameQuality } from '@cropmerge/types'
 const props = defineProps<{
   runId: string
   frames: FrameQuality[]
+  /** Short-lived, direct vision-host URLs keyed by artifact-relative path. */
+  artifactUrls: Record<string, string>
   framesSampled?: number
   /** Prefer jumping to the frame nearest this timestamp (seconds). */
   focusTimestampSec?: number | null
@@ -46,11 +48,11 @@ function pad(i: number) {
 }
 
 function rawUrl(i: number) {
-  return `/api/artifacts/${props.runId}/frames/frame_${pad(i)}.jpg`
+  return props.artifactUrls[`frames/frame_${pad(i)}.jpg`] || ''
 }
 
 function overlayUrl(i: number) {
-  return `/api/artifacts/${props.runId}/overlays/overlay_${pad(i)}.jpg`
+  return props.artifactUrls[`overlays/overlay_${pad(i)}.jpg`] || ''
 }
 
 function select(i: number) {

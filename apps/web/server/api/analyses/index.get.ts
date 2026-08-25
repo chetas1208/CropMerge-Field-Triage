@@ -1,6 +1,8 @@
 import { listJobs } from '../../utils/db'
+import { requireLegacyLocalProxy } from '../../utils/legacy-proxy'
 
 export default defineEventHandler(() => {
+  requireLegacyLocalProxy()
   return listJobs().map((j) => ({
     id: j.id,
     status: j.status,
