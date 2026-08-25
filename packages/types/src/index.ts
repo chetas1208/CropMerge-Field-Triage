@@ -168,6 +168,7 @@ export interface CreateAnalysisRequest {
 
 export interface VisionHealth {
   status: 'ok' | 'degraded'
+  service?: string
   version: string
   device: string
   segmentationBackend: SegmentationBackend
@@ -177,6 +178,12 @@ export interface VisionHealth {
   torchAvailable: boolean
   opencvAvailable: boolean
   ffmpegAvailable: boolean
+  gpuBusy?: boolean
+  gpuAvailable?: boolean
+  gpuMessage?: string | null
+  activeJobId?: string | null
+  queueDepth?: number
+  maxQueueDepth?: number
 }
 
 export const DISCLAIMER =

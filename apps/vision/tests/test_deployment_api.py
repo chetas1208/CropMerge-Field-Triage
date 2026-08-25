@@ -40,6 +40,8 @@ def test_health_is_public_and_does_not_expose_server_paths(tmp_path: Path, monke
 
     assert response.status_code == 200
     assert response.json()["service"] == "cropmerge-vision"
+    assert "gpuBusy" in response.json()
+    assert "queueDepth" in response.json()
     assert "databaseUrl" not in response.json()
     assert response.headers["cache-control"] == "no-store"
 

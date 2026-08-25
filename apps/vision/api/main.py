@@ -48,6 +48,7 @@ ALLOWED_EXTENSIONS = {
 }
 UPLOAD_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 JOB_ID_RE = re.compile(r"^[a-f0-9]{12}$")
+ACTIVE_JOB_STATUSES = frozenset({"preparing", "processing", "rendering"})
 
 
 class VisionSettings(BaseModel):
@@ -562,8 +563,44 @@ class JobManager:
         # The CV pipeline is GPU-heavy; this POC intentionally runs one job at a time.
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cropmerge-vision")
 
+    def queue_status(self) -> dict[str, Any]:
+        jobs = self.jobs.list(limit=100)
+        active = [job for job in jobs if job["status"] in ACTIVE_JOB_STATUSES]
+        queued = [job for job in jobs if job["status"] == "queued"]
+        gpu_ok, gpu_message = _gpu_memory_ok()
+        gpu_busy = len(active) > 0 or not gpu_ok
+        return {
+            "gpuBusy": gpu_busy,
+            "gpuAvailable": gpu_ok,
+            "gpuMessage": gpu_message,
+            "activeJobId": active[0]["id"] if active else None,
+            "queueDepth": len(queued),
+            "maxQueueDepth": _max_queue_depth(),
+        }
+
     def submit(self, upload: UploadRecord, request: AnalysisRequest) -> dict[str, Any]:
+        status = self.queue_status()
+        if not status["gpuAvailable"]:
+            raise HTTPException(
+                status_code=503,
+                detail=status["gpuMessage"] or "GPU is unavailable on the vision server.",
+            )
+        if status["queueDepth"] >= status["maxQueueDepth"]:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"GPU queue is full ({status['queueDepth']} waiting). "
+                    "Try again in a few minutes."
+                ),
+            )
         job = self.jobs.create(upload, request)
+        refreshed = self.queue_status()
+        if refreshed["gpuBusy"] or refreshed["queueDepth"] > 1:
+            ahead = max(0, refreshed["queueDepth"] - 1)
+            job = self.jobs.update(
+                job["id"],
+                message=f"Waiting for GPU — {ahead} job(s) ahead",
+            )
         self.executor.submit(self._run, job["id"])
         return job
 
@@ -655,6 +692,26 @@ def _device() -> str:
         return "cpu"
 
 
+def _gpu_memory_ok() -> tuple[bool, str | None]:
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return True, None
+        free, total = torch.cuda.mem_get_info()
+        min_free = int(os.environ.get("VISION_GPU_MIN_FREE_BYTES", str(512 * 1024 * 1024)))
+        if free < min_free:
+            used_pct = round(100 * (1 - free / total)) if total else 100
+            return False, f"GPU memory is nearly full ({used_pct}% used). Try again shortly."
+        return True, None
+    except Exception:
+        return True, None
+
+
+def _max_queue_depth() -> int:
+    return max(1, int(os.environ.get("VISION_MAX_QUEUE_DEPTH", "3")))
+
+
 def create_app() -> FastAPI:
     cfg = settings()
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
@@ -677,8 +734,10 @@ def create_app() -> FastAPI:
         _no_store(response)
         seg = os.environ.get("CROP_MERGE_SEGMENTATION_BACKEND", "heuristic")
         dino = os.environ.get("CROP_MERGE_DINO_BACKEND", "heuristic")
+        queue = _manager().queue_status()
+        gpu_ok = bool(queue["gpuAvailable"])
         return {
-            "status": "ok" if _opencv_ok() else "degraded",
+            "status": "ok" if _opencv_ok() and gpu_ok else "degraded",
             "service": "cropmerge-vision",
             "version": __version__,
             "device": _device(),
@@ -691,6 +750,12 @@ def create_app() -> FastAPI:
             "torchAvailable": _torch_ok(),
             "opencvAvailable": _opencv_ok(),
             "ffmpegAvailable": _ffmpeg_ok(),
+            "gpuBusy": queue["gpuBusy"],
+            "gpuAvailable": queue["gpuAvailable"],
+            "gpuMessage": queue["gpuMessage"],
+            "activeJobId": queue["activeJobId"],
+            "queueDepth": queue["queueDepth"],
+            "maxQueueDepth": queue["maxQueueDepth"],
         }
 
     @app.get("/vision/runs")

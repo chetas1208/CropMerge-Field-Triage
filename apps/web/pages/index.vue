@@ -1,16 +1,11 @@
 <script setup lang="ts">
-import type { AnalysisJob, FieldTriageReport, InspectionZone } from '@cropmerge/types'
+import type { AnalysisJob, FieldTriageReport, InspectionZone, VisionHealth } from '@cropmerge/types'
 
 type Health = {
   ok?: boolean
   error?: string
   db?: { ok?: boolean; mode?: string; path?: string }
-  vision?: {
-    status?: string
-    device?: string
-    segmentationBackend?: string
-    dinoBackend?: string
-  }
+  vision?: VisionHealth
 }
 
 type RecentJob = {
@@ -61,8 +56,8 @@ onMounted(async () => {
 
 async function refreshHealth() {
   try {
-    const vision = await request<NonNullable<Health['vision']>>('/vision/health', {}, false)
-    health.value = { ok: vision.status === 'ok', vision }
+    const vision = await request<VisionHealth>('/vision/health', {}, false)
+    health.value = { ok: vision.status === 'ok' && vision.gpuAvailable !== false, vision }
   } catch {
     health.value = { ok: false, error: 'Health check failed' }
   }
@@ -112,6 +107,18 @@ const highestPriority = computed(() => {
 })
 
 const visionOnline = computed(() => health.value?.vision?.status === 'ok')
+const gpuBusy = computed(() => Boolean(health.value?.vision?.gpuBusy))
+const gpuStatusMessage = computed(() => {
+  const vision = health.value?.vision
+  if (vision?.gpuMessage) return vision.gpuMessage
+  if (gpuBusy.value) {
+    const depth = vision?.queueDepth ?? 0
+    return depth > 0
+      ? `GPU is busy — ${depth} analysis job(s) waiting in queue.`
+      : 'GPU is busy running another analysis.'
+  }
+  return ''
+})
 
 function pct(n: number | undefined) {
   if (n == null || Number.isNaN(n)) return '—'
@@ -287,6 +294,9 @@ async function waitForAnalysis(id: string, signal: AbortSignal) {
     if (current.status === 'failed' || current.status === 'cancelled') {
       throw new Error(current.error || current.message || 'Analysis did not complete')
     }
+    if (current.status === 'queued' && current.message) {
+      error.value = ''
+    }
     await new Promise<void>((resolve, reject) => {
       const timer = window.setTimeout(resolve, 1500)
       signal.addEventListener(
@@ -308,7 +318,12 @@ async function analyze() {
     return
   }
   if (!visionOnline.value) {
-    error.value = 'Vision engine is offline. Start it on port 8001, then try again.'
+    error.value = health.value?.vision?.gpuMessage
+      || 'Vision engine is offline. Start it on port 8001, then try again.'
+    return
+  }
+  if (gpuBusy.value && (health.value?.vision?.queueDepth ?? 0) >= (health.value?.vision?.maxQueueDepth ?? 3)) {
+    error.value = gpuStatusMessage.value || 'GPU queue is full. Try again in a few minutes.'
     return
   }
   loading.value = true
@@ -513,10 +528,24 @@ const mediaSrc = computed(() => {
                 <span class="mono">{{ health?.vision?.device || '—' }}</span>
               </div>
               <div class="row row-between">
+                <span class="muted">GPU queue</span>
+                <span class="chip" :class="gpuBusy ? 'warn' : 'ok'">
+                  <span class="dot" />
+                  {{
+                    gpuBusy
+                      ? `${health?.vision?.queueDepth ?? 0} waiting`
+                      : 'Available'
+                  }}
+                </span>
+              </div>
+              <div class="row row-between">
                 <span class="muted">Database</span>
                 <span class="mono">{{ health?.db?.mode || 'sqlite' }}</span>
               </div>
             </div>
+            <p v-if="gpuStatusMessage" class="warn-banner" style="margin-top: 1rem; margin-bottom: 0">
+              {{ gpuStatusMessage }}
+            </p>
             <p v-if="!visionOnline" class="error-banner" style="margin-top: 1rem; margin-bottom: 0">
               Start vision:
               <code class="mono">cd apps/vision && uvicorn api.main:app --port 8001</code>

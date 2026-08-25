@@ -16,6 +16,7 @@ build/
 .env
 .env.*
 !.env.example
+deploy/local/
 *.pem
 *.key
 id_rsa*

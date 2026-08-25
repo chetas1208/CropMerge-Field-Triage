@@ -9,6 +9,11 @@ function responseMessage(status: number, body: unknown): string {
       ?? (body as { statusMessage?: unknown }).statusMessage
     if (typeof detail === 'string') return detail
   }
+  if (status === 503) {
+    return 'Vision server is busy or unavailable. Check the GPU server and try again shortly.'
+  }
+  if (status === 401) return 'Vision session expired. Refresh the page and try again.'
+  if (status === 403) return 'This origin is not allowed to reach the vision server.'
   return `Vision request failed (${status})`
 }
 

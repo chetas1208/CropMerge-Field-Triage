@@ -879,6 +879,15 @@ select {
   font-size: 0.88rem;
 }
 
+.warn-banner {
+  border: 1px solid color-mix(in srgb, var(--medium) 35%, var(--border));
+  background: color-mix(in srgb, var(--medium) 12%, var(--bg-card));
+  color: #c9972a;
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  font-size: 0.88rem;
+}
+
 .limitations details {
   border: 1px solid var(--border);
   border-radius: var(--radius);
