@@ -50,7 +50,38 @@ Deploy the **existing** local system without rewriting the CV pipeline. Vercel s
 | Cloudflare Tunnel | systemd on GPU host | [cloudflare/README.md](./cloudflare/README.md) |
 | systemd units | GPU host | [systemd/](./systemd/) |
 
-## Quick setup order
+## Persistent nohup (survives reboot)
+
+```bash
+# One-time: register @reboot + 5-minute watchdog
+./deploy/scripts/install-reboot.sh
+
+# Manual start (vision + tunnel, nohup)
+./deploy/scripts/start-all.sh
+```
+
+| Script | Purpose |
+| --- | --- |
+| `start-vision.sh` | Vision API on `127.0.0.1:8001` (GPU, sam2/dinov2) |
+| `start-tunnel.sh` | Cloudflare quick tunnel → vision |
+| `start-all.sh` | Both |
+| `watchdog.sh` | Restarts anything unhealthy (cron every 5 min) |
+| `tail-api-logs.sh` | Follow API + tunnel logs |
+
+Logs: `deploy/local/reboot.log`, `deploy/local/watchdog.log`
+
+## GPU
+
+Set in `deploy/local/vision.env`:
+
+```dotenv
+CUDA_VISIBLE_DEVICES=1          # free GPU on multi-3090 hosts
+CROP_MERGE_DEVICE=cuda
+CROP_MERGE_SEGMENTATION_BACKEND=sam2
+CROP_MERGE_DINO_BACKEND=dinov2
+```
+
+Health should report `"device": "cuda"`, `"sam2Available": true`.
 
 1. **Vision service** — create `/etc/cropmerge/vision.env`, install `cropmerge-vision.service`, verify `curl http://127.0.0.1:8001/vision/health`.
 2. **Cloudflare Tunnel** — create named tunnel `cropmerge-field-triage`, hostname `vision.<domain>` → `http://127.0.0.1:8001`, install `cloudflared` systemd service.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -77,8 +78,14 @@ class FieldTriageProcessor:
         vcfg = self.cfg.setdefault("video", {})
         sample_fps = float(sample_fps if sample_fps is not None else vcfg.get("sample_fps", 2.0))
         max_frames = max_frames if max_frames is not None else vcfg.get("max_frames", 120)
-        import os
-
+        if os.environ.get("CROP_MERGE_SAMPLE_FPS"):
+            sample_fps = float(os.environ["CROP_MERGE_SAMPLE_FPS"])
+        if os.environ.get("CROP_MERGE_MAX_FRAMES"):
+            max_frames = int(os.environ["CROP_MERGE_MAX_FRAMES"])
+        if os.environ.get("CROP_MERGE_N_SUPERPIXELS"):
+            self.cfg.setdefault("segmentation", {})["n_superpixels"] = int(
+                os.environ["CROP_MERGE_N_SUPERPIXELS"]
+            )
         seg_backend = (
             segmentation_backend
             or os.environ.get("CROP_MERGE_SEGMENTATION_BACKEND")

@@ -357,7 +357,7 @@ async function analyze() {
         sampleFps: 2,
         // Images are repeated across a few synthetic timestamps so temporal
         // persistence (min ~3 frames) can still form inspection zones.
-        maxFrames: isImageUpload.value ? 3 : 40,
+        maxFrames: isImageUpload.value ? 3 : 24,
         skipDino: false,
         segmentationBackend: health.value?.vision?.segmentationBackend || 'heuristic',
         dinoBackend: health.value?.vision?.dinoBackend || 'heuristic',
