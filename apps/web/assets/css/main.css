@@ -879,6 +879,22 @@ select {
   font-size: 0.88rem;
 }
 
+.flight-brief {
+  border-left: 3px solid var(--crop);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--crop) 8%, var(--bg-card)),
+    var(--bg-card)
+  );
+}
+
+.flight-brief-text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
 .warn-banner {
   border: 1px solid color-mix(in srgb, var(--medium) 35%, var(--border));
   background: color-mix(in srgb, var(--medium) 12%, var(--bg-card));

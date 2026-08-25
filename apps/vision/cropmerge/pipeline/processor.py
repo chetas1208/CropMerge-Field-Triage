@@ -322,7 +322,7 @@ class FieldTriageProcessor:
             limitations=limitations,
             artifacts=artifacts,
             georeferenced=False,
-            map_label="Image-relative field map — not georeferenced",
+            map_label="Annotated fly-through — boxes mark zones that stuck around frame-to-frame",
         )
 
         camel = report.to_camel_dict()

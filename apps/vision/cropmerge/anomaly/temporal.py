@@ -171,7 +171,13 @@ def aggregate_zones(
                     persistence=round(persistence, 4),
                 ),
                 reasons=reasons,
-                recommendation=recommendation(pri),
+                recommendation=recommendation(
+                    pri,
+                    location=relative_location(cx, cy).value,
+                    anomaly_score=mean_score,
+                    persistence=persistence,
+                    frames_seen=len(tr.timestamps),
+                ),
             )
         )
 

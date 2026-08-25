@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { InspectionZone } from '@cropmerge/types'
+import { zoneHeadline } from '~/composables/useFieldBrief'
 
 defineProps<{
   zone: InspectionZone
@@ -14,7 +15,7 @@ defineEmits<{ select: [] }>()
       <span class="zone-id">{{ zone.id }}</span>
       <span class="priority" :class="zone.reviewPriority">{{ zone.reviewPriority }}</span>
     </div>
-    <p class="zone-loc">{{ zone.relativeLocation.replace('-', ' ') }} field</p>
+    <p class="zone-loc">{{ zoneHeadline(zone) }}</p>
     <div class="zone-metrics">
       <div class="zone-metric">
         <label>Anomaly</label>

@@ -83,6 +83,19 @@ const report = computed(() => job.value?.report as FieldTriageReport | null | un
 
 const zones = computed(() => report.value?.inspectionZones ?? [])
 
+const { brief: fieldBrief, loadingLines, combinedReviewScore } = useFieldBrief(report, zones)
+
+const loadingCaption = computed(() => {
+  if (uploadProgress.value != null && uploadProgress.value < 1) {
+    return `Uploading directly to the vision server · ${Math.round(uploadProgress.value * 100)}%`
+  }
+  if (job.value?.message) return job.value.message
+  const stage = job.value?.stage || ''
+  const idx = ['queued', 'preparing', 'processing', 'rendering', 'completed'].indexOf(stage)
+  if (idx >= 0) return loadingLines[idx] ?? loadingLines[2]
+  return loadingLines[2]
+})
+
 const selectedZone = computed<InspectionZone | null>(() => {
   if (!zones.value.length) return null
   const hit = zones.value.find((z) => z.id === selectedZoneId.value)
@@ -591,11 +604,7 @@ const mediaSrc = computed(() => {
       <div class="spinner" aria-hidden="true" />
       <h2 class="upload-title" style="margin-bottom: 0.35rem">Analyzing field flight</h2>
       <p class="muted" style="margin: 0">
-        {{
-          uploadProgress != null && uploadProgress < 1
-            ? `Uploading directly to the vision server · ${Math.round(uploadProgress * 100)}%`
-            : job?.message || 'Sampling frames, segmenting regions, scoring visual variation, building inspection zones…'
-        }}
+        {{ loadingCaption }}
       </p>
       <div class="progress-track" aria-hidden="true"><i /></div>
       <div class="pipeline" style="justify-content: center">
@@ -643,6 +652,11 @@ const mediaSrc = computed(() => {
         <div>{{ report.disclaimer }}</div>
       </div>
 
+      <div v-if="fieldBrief" class="card flight-brief">
+        <h2 class="section-label">Pilot read</h2>
+        <p class="flight-brief-text">{{ fieldBrief }}</p>
+      </div>
+
       <!-- Overview stats -->
       <div class="card">
         <h2 class="section-label">Field overview</h2>
@@ -665,7 +679,7 @@ const mediaSrc = computed(() => {
           <div class="stat">
             <span class="label">Zones</span>
             <span class="value">{{ zones.length }}</span>
-            <span class="sub">persistent inspection</span>
+            <span class="sub">patches that stuck around</span>
           </div>
           <div class="stat">
             <span class="label">Priority</span>
@@ -675,7 +689,7 @@ const mediaSrc = computed(() => {
               </span>
               <span v-else>—</span>
             </span>
-            <span class="sub">highest review need</span>
+            <span class="sub">worst first on your next pass</span>
           </div>
           <div class="stat">
             <span class="label">Usable frames</span>
@@ -773,10 +787,10 @@ const mediaSrc = computed(() => {
           </div>
           <p class="media-caption">
             <template v-if="mediaTab === 'heatmap'">
-              Visual field variation — image-relative · not georeferenced · not a crop health map
+              Where the field stops matching itself — image-relative, not GPS, not a health map
             </template>
             <template v-else-if="mediaTab === 'montage'">
-              Representative overlays across the flight
+              Snapshot quilt from the flight — good for spotting row patterns at a glance
             </template>
             <template v-else-if="mediaTab === 'frames'">
               Full per-frame strip is below — every sample the engine scored
@@ -820,15 +834,20 @@ const mediaSrc = computed(() => {
               <strong>{{ selectedZone.persistenceScore.toFixed(2) }}</strong>
               <ScoreBar :value="selectedZone.persistenceScore" />
             </div>
+            <div class="zone-metric">
+              <label>Review score</label>
+              <strong>{{ combinedReviewScore(selectedZone).toFixed(2) }}</strong>
+              <span class="muted" style="font-size: 0.72rem">65% oddity + 35% stickiness</span>
+            </div>
           </div>
 
-          <h3 class="section-label" style="margin-top: 1.15rem">Why flagged</h3>
+          <h3 class="section-label" style="margin-top: 1.15rem">What we saw</h3>
           <ul>
             <li v-for="(r, i) in selectedZone.reasons" :key="i">{{ r }}</li>
           </ul>
 
           <div class="reco">
-            <strong>Recommendation</strong>
+            <strong>Next pass</strong>
             {{ selectedZone.recommendation }}
           </div>
         </div>
