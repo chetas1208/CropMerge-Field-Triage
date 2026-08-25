@@ -8,7 +8,7 @@ PORT="${VISION_PORT:-8001}"
 mkdir -p "$ROOT/deploy/local"
 pkill -f "cloudflared tunnel --url http://127.0.0.1:${PORT}" 2>/dev/null || true
 sleep 1
-nohup cloudflared tunnel --url "http://127.0.0.1:${PORT}" >>"$LOG" 2>&1 &
+nohup cloudflared tunnel --url "http://127.0.0.1:${PORT}" --loglevel info >>"$LOG" 2>&1 &
 echo "cloudflared PID=$!"
 for _ in $(seq 1 15); do
   URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG" | tail -1 || true)"

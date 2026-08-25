@@ -19,11 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from api.access_log import AccessLogMiddleware
 from cropmerge import __version__
 from cropmerge.config import load_config
 from cropmerge.db import list_runs
 from cropmerge.features.dinov3 import dinov3_available
-from cropmerge.logging_utils import setup_logging
+from cropmerge.logging_utils import setup_access_logging, setup_logging
 from cropmerge.pipeline.processor import FieldTriageProcessor
 from cropmerge.segmentation.sam3 import sam3_available
 
@@ -41,6 +42,10 @@ except Exception:  # pragma: no cover
 
 
 setup_logging(os.environ.get("CROP_MERGE_LOG_LEVEL", "INFO"))
+setup_access_logging(
+    log_path=os.environ.get("VISION_API_LOG_PATH", "").strip() or None,
+    level=os.environ.get("VISION_ACCESS_LOG_LEVEL", "INFO"),
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ALLOWED_EXTENSIONS = {
@@ -720,6 +725,7 @@ def create_app() -> FastAPI:
         version=__version__,
         description="Direct browser-facing CV inference service for CropMerge Field Triage.",
     )
+    app.add_middleware(AccessLogMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origins,

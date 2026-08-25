@@ -34,6 +34,45 @@ sudo systemctl status cloudflared
 
 The token file is stored under `/etc/cloudflared/` with restricted permissions. Never add it to Git.
 
+## Logs
+
+Two log files cover the Cloudflare → vision path:
+
+| File | Contents |
+| --- | --- |
+| `deploy/local/cloudflared.log` | Tunnel connector status, connection errors, public URL |
+| `deploy/local/vision-api.log` | Structured JSON access log for every `/vision/*` request |
+
+Tail both:
+
+```bash
+./deploy/scripts/tail-api-logs.sh
+```
+
+Each API line is JSON, for example:
+
+```json
+{"event":"api_access","request_id":"a1b2c3d4e5f6","method":"POST","path":"/vision/analyses","status":202,"duration_ms":12.4,"client_ip":"203.0.113.10","cf_ray":"abc123","origin":"https://cropmerge-field-triage.vercel.app","via_cloudflare":true,"resource_id":"d46506578751"}
+```
+
+Configure on the GPU host:
+
+```dotenv
+VISION_API_LOG_PATH=/path/to/deploy/local/vision-api.log
+VISION_ACCESS_LOG_LEVEL=INFO
+```
+
+Notes:
+- `GET /vision/health` is skipped by default to reduce noise (set header `X-Cropmerge-Access-Health: true` to log a health probe).
+- Authorization headers, JWTs, and upload bytes are **never** logged.
+- Responses include `X-Request-Id` for correlation.
+
+Cloudflare connector log level:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8001 --loglevel info
+```
+
 ## Verify tunnel
 
 ```bash
