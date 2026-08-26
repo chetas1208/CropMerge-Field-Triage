@@ -13,9 +13,11 @@ const props = defineProps<{
 
 const selectedIndex = ref(0)
 const viewMode = ref<'overlay' | 'raw' | 'split'>('overlay')
+const overlayKind = ref<'segmentation' | 'continuity'>('segmentation')
 const playing = ref(false)
 let playTimer: ReturnType<typeof setInterval> | null = null
 
+const rootEl = ref<HTMLElement | null>(null)
 const stripEl = ref<HTMLElement | null>(null)
 
 const frameList = computed(() => {
@@ -52,7 +54,9 @@ function rawUrl(i: number) {
 }
 
 function overlayUrl(i: number) {
-  return props.artifactUrls[`overlays/overlay_${pad(i)}.jpg`] || ''
+  const sub = overlayKind.value === 'continuity' ? 'continuity' : 'overlays'
+  const prefix = overlayKind.value === 'continuity' ? 'continuity' : 'overlay'
+  return props.artifactUrls[`${sub}/${prefix}_${pad(i)}.jpg`] || props.artifactUrls[`overlays/overlay_${pad(i)}.jpg`] || ''
 }
 
 function select(i: number) {
@@ -70,11 +74,13 @@ function next() {
 }
 
 function scrollThumbIntoView() {
+  if (playing.value) return
   nextTick(() => {
     const root = stripEl.value
     if (!root) return
     const thumb = root.querySelector<HTMLElement>(`[data-frame-idx="${selectedIndex.value}"]`)
-    thumb?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+    if (!thumb) return
+    scrollFilmstripThumb(root, thumb)
   })
 }
 
@@ -92,6 +98,7 @@ function togglePlay() {
     return
   }
   if (!count.value) return
+  stopPlay()
   playing.value = true
   playTimer = setInterval(() => {
     if (selectedIndex.value >= count.value - 1) {
@@ -103,6 +110,7 @@ function togglePlay() {
 }
 
 function onKey(e: KeyboardEvent) {
+  if (!isInsideFrameReview(e.target)) return
   const t = e.target as HTMLElement | null
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
   if (e.key === 'ArrowLeft') {
@@ -114,11 +122,8 @@ function onKey(e: KeyboardEvent) {
     stopPlay()
     next()
   } else if (e.key === ' ' || e.key === 'Spacebar') {
-    // only if focus is inside this component-ish — avoid fighting page scroll when not intended
-    if ((e.target as HTMLElement)?.closest?.('.frame-review')) {
-      e.preventDefault()
-      togglePlay()
-    }
+    e.preventDefault()
+    togglePlay()
   } else if (e.key === '1') {
     viewMode.value = 'raw'
   } else if (e.key === '2') {
@@ -162,6 +167,12 @@ onMounted(() => {
   window.addEventListener('keydown', onKey)
 })
 
+useViewportPlaybackPause(rootEl, {
+  threshold: 0.3,
+  isPlaying: () => playing.value,
+  onPause: stopPlay,
+})
+
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   stopPlay()
@@ -174,7 +185,7 @@ function pct(n: number | undefined) {
 </script>
 
 <template>
-  <div class="card frame-review">
+  <div ref="rootEl" class="card frame-review" tabindex="-1">
     <div class="card-head">
       <div>
         <h2 class="section-label" style="margin: 0">
@@ -184,10 +195,30 @@ function pct(n: number | undefined) {
           </span>
         </h2>
         <p class="muted" style="margin: 0.35rem 0 0; font-size: 0.82rem">
-          Every frame the engine scored — click a thumb, scrub with ← →, play to step through.
+          Every sampled frame — click a thumbnail, use ← →, or play to step through.
         </p>
       </div>
       <div class="frame-toolbar">
+        <div class="tabs" role="tablist" aria-label="Overlay view" v-if="viewMode !== 'raw'">
+          <span class="muted" style="font-size: 0.72rem; align-self: center; margin-right: 0.25rem">Overlay</span>
+          <button
+            type="button"
+            class="tab"
+            :class="{ active: overlayKind === 'segmentation' }"
+            @click="overlayKind = 'segmentation'"
+          >
+            Field segmentation
+          </button>
+          <button
+            type="button"
+            class="tab"
+            :class="{ active: overlayKind === 'continuity' }"
+            title="Highlights possible gaps and fragmented crop areas"
+            @click="overlayKind = 'continuity'"
+          >
+            Crop continuity
+          </button>
+        </div>
         <div class="tabs" role="tablist" aria-label="Frame view mode">
           <button
             type="button"
@@ -218,7 +249,13 @@ function pct(n: number | undefined) {
           <button type="button" class="btn btn-ghost btn-sm" :disabled="selectedIndex <= 0" @click="stopPlay(); prev()">
             ← Prev
           </button>
-          <button type="button" class="btn btn-ghost btn-sm" :disabled="!count" @click="togglePlay">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="!count"
+            :aria-label="playing ? 'Pause replay' : 'Play replay'"
+            @click="togglePlay"
+          >
             {{ playing ? 'Pause' : 'Play' }}
           </button>
           <button
@@ -266,7 +303,9 @@ function pct(n: number | undefined) {
           <span class="muted mono">{{ selected.timestampSec.toFixed(2) }}s</span>
           <span class="muted">{{ selectedIndex + 1 }} / {{ count }}</span>
         </div>
-        <div class="frame-quality-grid">
+        <details class="frame-tech" style="margin-top: 0.65rem">
+          <summary class="muted" style="cursor: pointer; font-size: 0.78rem">View frame quality details</summary>
+          <div class="frame-quality-grid" style="margin-top: 0.5rem">
           <div class="fq">
             <label>Sharpness</label>
             <strong>{{ pct(selected.sharpness) }}</strong>
@@ -287,7 +326,8 @@ function pct(n: number | undefined) {
             <strong>{{ Math.round(selected.meanLuminance) }}</strong>
             <span class="muted" style="font-size: 0.72rem">mean 0–255</span>
           </div>
-        </div>
+          </div>
+        </details>
         <ul v-if="selected.warnings?.length" class="frame-warnings">
           <li v-for="(w, i) in selected.warnings" :key="i">{{ w }}</li>
         </ul>

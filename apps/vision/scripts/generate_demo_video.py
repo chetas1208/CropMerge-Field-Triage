@@ -6,49 +6,8 @@ import argparse
 from pathlib import Path
 
 import cv2
-import numpy as np
 
-
-def make_frame(t: float, w: int = 640, h: int = 360) -> np.ndarray:
-    """Procedural field: green crop, soil patch anomaly, dirt road, trees."""
-    y, x = np.mgrid[0:h, 0:w]
-    # Pan slowly
-    shift = int(20 * np.sin(t * 0.7))
-    xx = x + shift
-
-    # Base crop green with high-frequency rows (sharper Laplacian)
-    row = 25 * (((xx // 4 + y // 3) % 2) * 2 - 1)
-    g = 110 + 35 * np.sin((xx + y * 0.2) / 6.0) + 12 * np.sin(y / 15.0) + row * 0.35
-    r = 45 + 12 * np.sin(xx / 22.0)
-    b = 40 + 10 * np.cos(y / 18.0)
-    img = np.stack([b, g, r], axis=-1).astype(np.float32)
-
-    # Bare soil patch (persistent anomaly NE) — strong color break
-    cy, cx = int(0.28 * h), int(0.72 * w) + shift // 2
-    soil = ((y - cy) ** 2 / (50 ** 2) + (x - cx) ** 2 / (60 ** 2)) < 1.0
-    img[soil] = np.array([55, 100, 170], dtype=np.float32)  # BGR brown
-
-    # Secondary weak anomaly (lower crop density SW)
-    cy2, cx2 = int(0.72 * h), int(0.25 * w)
-    thin = ((y - cy2) ** 2 / (40 ** 2) + (x - cx2) ** 2 / (48 ** 2)) < 1.0
-    img[thin] = img[thin] * 0.4 + np.array([45, 65, 120], dtype=np.float32) * 0.6
-
-    # Dirt road horizontal band
-    road = (y > h * 0.55) & (y < h * 0.62) & (x > w * 0.05) & (x < w * 0.95)
-    img[road] = np.array([75, 90, 105], dtype=np.float32)
-    img[road] += (((x[road] // 3) % 2) * 8 - 4)[:, None]
-
-    # Tree line top
-    trees = (y < h * 0.12) & (np.sin(x / 10.0) > -0.15)
-    img[trees] = np.array([20, 50, 15], dtype=np.float32)
-
-    rng = np.random.default_rng(int(t * 1000) % 10000)
-    img += rng.normal(0, 4.0, img.shape).astype(np.float32)
-    out = np.clip(img, 0, 255).astype(np.uint8)
-    # Rare mild blur only
-    if int(t * 10) % 23 == 0:
-        out = cv2.GaussianBlur(out, (3, 3), 0)
-    return out
+from cropmerge.eval.synthetic_field import make_synthetic_frame as make_frame
 
 
 def main() -> int:

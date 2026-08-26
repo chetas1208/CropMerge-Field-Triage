@@ -17,8 +17,11 @@ class GridCell:
     valid: bool
     features: dict[str, float] = field(default_factory=dict)
     embedding: np.ndarray | None = None
-    anomaly_score: float = 0.0
+    anomaly_score: float = 0.0  # combined review base = max(appearance, structural)
+    appearance_anomaly_score: float = 0.0
+    structural_anomaly_score: float = 0.0
     contributions: dict[str, float] = field(default_factory=dict)
+    row_visibility: str = "LOW"
 
 
 def build_grid(h: int, w: int, rows: int, cols: int) -> list[GridCell]:

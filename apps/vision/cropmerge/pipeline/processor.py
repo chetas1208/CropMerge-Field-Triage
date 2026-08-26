@@ -13,18 +13,21 @@ import numpy as np
 
 from cropmerge import DEFAULT_LIMITATIONS, DISCLAIMER
 from cropmerge.anomaly.spatial import score_frame
+from cropmerge.anomaly.structural import score_structural_cells
 from cropmerge.anomaly.temporal import aggregate_zones
 from cropmerge.config import load_config
 from cropmerge.features.dinov3 import create_embedder
 from cropmerge.pipeline.schemas import (
     AnalysisSummary,
     ArtifactPaths,
+    CropCoverageDetail,
+    FieldBoundaryInfo,
     FieldSummary,
     FieldTriageReport,
     VideoSourceMeta,
 )
 from cropmerge.segmentation import create_segmenter
-from cropmerge.segmentation.postprocess import class_fractions
+from cropmerge.segmentation.postprocess import boundary_confidence, class_fractions
 from cropmerge.video.decoder import sample_frames
 from cropmerge.video.quality import analyze_sequence
 from cropmerge.video.registration import estimate_homography
@@ -150,6 +153,8 @@ class FieldTriageProcessor:
         frame_cells = []
         heats = []
         qweights = []
+        structural_frames = []
+        row_visibilities: list[str] = []
         for fr, seg, q in zip(frames, segs, qualities):
             field = (
                 seg.field_mask
@@ -163,12 +168,23 @@ class FieldTriageProcessor:
             )
             emb = embedder.embed_tiles(fr.bgr, field, rows, cols)
             cells, heat = score_frame(fr.bgr, field, label, emb, self.cfg)
-            # Quality weighting (blur/exposure reduce temporal influence)
+            cells, sres = score_structural_cells(
+                cells, fr.bgr, field, label, seg.crop_mask, self.cfg
+            )
+            row_visibilities.append(sres.row_visibility)
+            structural_frames.append(sres)
+            for c in cells:
+                c.anomaly_score = float(
+                    max(c.appearance_anomaly_score, c.structural_anomaly_score)
+                )
+                c.row_visibility = sres.row_visibility
             qw = float(q.quality_weight)
             if qw < 1.0:
                 heat = heat * qw
                 for c in cells:
                     c.anomaly_score *= qw
+                    c.appearance_anomaly_score *= qw
+                    c.structural_anomaly_score *= qw
             frame_cells.append(cells)
             heats.append(heat)
             qweights.append(qw)
@@ -177,12 +193,14 @@ class FieldTriageProcessor:
         # --- temporal consensus → inspection zones ---
         t = time.perf_counter()
         h, w = frames[0].bgr.shape[:2]
+        reg_conf_series = [1.0] + reg_confs
         zones = aggregate_zones(
             frame_cells,
             [f.timestamp_sec for f in frames],
             qweights,
             (h, w),
             self.cfg,
+            registration_confidences=reg_conf_series,
         )
         # Quality- and registration-weighted mean heatmap for export
         fused_heat = None
@@ -221,9 +239,38 @@ class FieldTriageProcessor:
             infra = infra or fracs.get("INFRASTRUCTURE", 0) > 0.005
 
         mean_field = float(np.mean(field_fracs)) if field_fracs else 0.0
-        field_detected = mean_field >= 0.08 and (float(np.mean(crop_covs)) if crop_covs else 0) + (
-            float(np.mean(bare_covs)) if bare_covs else 0
-        ) >= 0.05
+        mean_crop = float(np.mean(crop_covs)) if crop_covs else 0.0
+        mean_bare = float(np.mean(bare_covs)) if bare_covs else 0.0
+        mean_unknown = float(np.mean(class_acc.get("UNKNOWN", [0.0]))) if class_acc.get("UNKNOWN") else 0.0
+        non_crop = sum(
+            float(np.mean(class_acc.get(k, [0.0])))
+            for k in ("ROAD_PATH", "TREE_VEGETATION", "WATER", "INFRASTRUCTURE")
+            if k in class_acc
+        )
+        field_detected = mean_field >= 0.08 and mean_crop + mean_bare >= 0.05
+
+        # Row visibility aggregate
+        vis_rank = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+        row_vis = "LOW"
+        if row_visibilities:
+            avg = float(np.mean([vis_rank.get(v, 1) for v in row_visibilities]))
+            row_vis = "HIGH" if avg >= 2.5 else ("MEDIUM" if avg >= 1.5 else "LOW")
+
+        # Boundary from median frame
+        mid_seg = segs[len(segs) // 2] if segs else None
+        bnd_conf = "Low"
+        if mid_seg and mid_seg.field_mask is not None:
+            bnd_conf = boundary_confidence(mid_seg.field_mask, mid_seg.label_map)
+
+        crop_detail = CropCoverageDetail(
+            estimated_fraction=round(mean_crop, 4),
+            analyzable_fraction=round(mean_field, 4),
+            segmentation_confidence=None if used_fallback else round(mean_field, 4),
+            uncertain_fraction=round(mean_unknown, 4),
+            bare_soil_fraction=round(mean_bare, 4),
+            non_crop_fraction=round(non_crop, 4),
+        )
+        boundary_info = FieldBoundaryInfo(confidence=bnd_conf)
 
         if not field_detected:
             zones = []
@@ -231,20 +278,23 @@ class FieldTriageProcessor:
 
         field_summary = FieldSummary(
             detected=field_detected,
-            mean_crop_coverage=round(float(np.mean(crop_covs)) if crop_covs else 0.0, 4),
-            mean_bare_soil=round(float(np.mean(bare_covs)) if bare_covs else 0.0, 4),
+            mean_crop_coverage=round(mean_crop, 4),
+            mean_bare_soil=round(mean_bare, 4),
             road_path_detected=road,
             tree_vegetation_detected=tree,
             water_detected=water,
             infrastructure_detected=infra,
             mean_field_fraction=round(mean_field, 4),
+            crop_coverage=crop_detail,
+            boundary=boundary_info,
+            row_visibility=row_vis,
         )
         class_coverage = {k: round(float(np.mean(v)), 4) for k, v in class_acc.items()}
 
         # --- render ---
         t = time.perf_counter()
         annotated = []
-        for fr, seg in zip(frames, segs):
+        for fr, seg, sres in zip(frames, segs, structural_frames):
             ann = annotate_frame(
                 fr.bgr,
                 seg.label_map,
@@ -252,11 +302,23 @@ class FieldTriageProcessor:
                 zones if field_detected else [],
                 fr.timestamp_sec,
                 self.cfg,
+                structural=sres,
             )
             annotated.append(ann)
             if self.cfg.get("output", {}).get("write_frames", True):
                 write_image(frames_dir / f"frame_{fr.index:04d}.jpg", fr.bgr)
-                write_image(overlays_dir / f"overlay_{fr.index:04d}.jpg", ann)
+            write_image(overlays_dir / f"overlay_{fr.index:04d}.jpg", ann)
+            cont = annotate_frame(
+                fr.bgr,
+                seg.label_map,
+                seg.field_mask,
+                zones if field_detected else [],
+                fr.timestamp_sec,
+                self.cfg,
+                structural=sres,
+                overlay_mode="continuity",
+            )
+            write_image(overlays_dir / f"continuity_{fr.index:04d}.jpg", cont)
 
         ann_path = None
         if self.cfg.get("output", {}).get("write_annotated_video", True):
@@ -291,6 +353,10 @@ class FieldTriageProcessor:
             )
         if not field_detected:
             limitations.append("No field detected in sampled frames")
+        if row_vis == "LOW":
+            limitations.append(
+                "Row visibility LOW — plant-level gap detection limited; using canopy fragmentation analysis"
+            )
         if reg_confs and float(np.mean(reg_confs)) < 0.3:
             limitations.append("Low average registration confidence between frames")
 
@@ -329,7 +395,7 @@ class FieldTriageProcessor:
             limitations=limitations,
             artifacts=artifacts,
             georeferenced=False,
-            map_label="Annotated fly-through — boxes mark zones that stuck around frame-to-frame",
+            map_label="Analysis field boundary — vision estimate, not a property or surveyed boundary",
         )
 
         camel = report.to_camel_dict()

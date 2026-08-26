@@ -35,6 +35,16 @@ export type AnalysisStatus =
 export type SegmentationBackend = 'sam3' | 'heuristic' | 'mock'
 export type DinoBackend = 'dinov3' | 'heuristic' | 'mock'
 
+export type InspectionZoneType =
+  | 'stand_gap'
+  | 'sparse_canopy'
+  | 'exposed_soil'
+  | 'color_variation'
+  | 'texture_variation'
+  | 'water_like_region'
+  | 'row_discontinuity'
+  | 'general_visual_variation'
+
 export interface ZoneEvidence {
   cropCoverageDelta?: number
   colorDifference?: number
@@ -42,13 +52,28 @@ export interface ZoneEvidence {
   textureDifference?: number
   embeddingDifference?: number
   persistence?: number
+  appearanceAnomalyScore?: number
+  structuralAnomalyScore?: number
+  rowContinuityBefore?: number
+  rowContinuityAfter?: number
+  gapExtentNormalized?: number
+  soilExposureDelta?: number
+  fragmentationScore?: number
+  registrationConfidence?: number
 }
 
 export interface InspectionZone {
   id: string
   reviewPriority: ReviewPriority
   anomalyScore: number
+  appearanceAnomalyScore?: number
+  structuralAnomalyScore?: number
+  reviewScore?: number
   persistenceScore: number
+  primaryType?: InspectionZoneType
+  primarySignalLabel?: string
+  persistentObservations?: number
+  totalObservations?: number
   firstSeenMs: number
   lastSeenMs: number
   firstSeenSec: number
@@ -60,6 +85,23 @@ export interface InspectionZone {
   evidence: ZoneEvidence
   reasons: string[]
   recommendation: string
+}
+
+export interface CropCoverageDetail {
+  estimatedFraction: number
+  analyzableFraction: number
+  segmentationConfidence?: number | null
+  uncertainFraction?: number
+  bareSoilFraction?: number
+  nonCropFraction?: number
+}
+
+export interface FieldBoundaryInfo {
+  label?: string
+  source?: string
+  confidence?: string
+  derivation?: string
+  tooltip?: string
 }
 
 export interface FrameQuality {
@@ -102,6 +144,9 @@ export interface FieldSummary {
   waterDetected: boolean
   infrastructureDetected: boolean
   meanFieldFraction: number
+  cropCoverage?: CropCoverageDetail | null
+  boundary?: FieldBoundaryInfo | null
+  rowVisibility?: string
 }
 
 export interface AnalysisSummary {

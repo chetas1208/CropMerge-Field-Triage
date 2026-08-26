@@ -1,5 +1,17 @@
 <script setup lang="ts">
 import type { AnalysisJob, FieldTriageReport, InspectionZone, VisionHealth } from '@cropmerge/types'
+import {
+  FIELD_COPY,
+  estimatedCropCoverage,
+  formatInspectionReasons,
+  formatObservations,
+  inspectionAreaTitle,
+  inspectionIssueLabel,
+  inspectionIssueTooltip,
+  locationLabel,
+  reviewPriorityLabel,
+  showLimitedAnalysis,
+} from '~/composables/useInspectionLabels'
 
 type Health = {
   ok?: boolean
@@ -28,10 +40,18 @@ const mediaTab = ref<'video' | 'heatmap' | 'montage' | 'frames'>('video')
 const selectedZoneId = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const frameSectionEl = ref<HTMLElement | null>(null)
+const mediaFrameEl = ref<HTMLElement | null>(null)
+const annotatedVideoEl = ref<HTMLVideoElement | null>(null)
 const uploadProgress = ref<number | null>(null)
 const activeUploadId = ref<string | null>(null)
 const abortController = ref<AbortController | null>(null)
 const { request } = useVisionApi()
+
+useViewportPlaybackPause(mediaFrameEl, {
+  threshold: 0.3,
+  isPlaying: () => Boolean(annotatedVideoEl.value && !annotatedVideoEl.value.paused),
+  onPause: () => annotatedVideoEl.value?.pause(),
+})
 
 function scrollToFrames() {
   mediaTab.value = 'frames'
@@ -44,10 +64,9 @@ const PIPELINE = [
   'Decode',
   'Quality',
   'Segment',
-  'Features',
-  'Anomaly',
-  'Temporal',
-  'Render',
+  'Compare',
+  'Track',
+  'Summarize',
 ]
 
 onMounted(async () => {
@@ -83,7 +102,7 @@ const report = computed(() => job.value?.report as FieldTriageReport | null | un
 
 const zones = computed(() => report.value?.inspectionZones ?? [])
 
-const { brief: fieldBrief, loadingLines, combinedReviewScore } = useFieldBrief(report, zones)
+const { brief: fieldBrief, loadingLines } = useFieldBrief(report, zones)
 
 const loadingCaption = computed(() => {
   if (uploadProgress.value != null && uploadProgress.value < 1) {
@@ -100,6 +119,13 @@ const selectedZone = computed<InspectionZone | null>(() => {
   if (!zones.value.length) return null
   const hit = zones.value.find((z) => z.id === selectedZoneId.value)
   return hit || zones.value[0]
+})
+
+const selectedAreaIndex = computed(() => {
+  const z = selectedZone.value
+  if (!z) return 0
+  const idx = zones.value.findIndex((item) => item.id === z.id)
+  return idx >= 0 ? idx : 0
 })
 
 watch(
@@ -427,10 +453,11 @@ const mediaSrc = computed(() => {
       <div class="row row-between">
         <div>
           <p class="section-label" style="margin-bottom: 0.35rem">Flight review</p>
-          <h1 class="page-title">Turn drone video into inspection zones</h1>
+          <h1 class="page-title">Review your field from drone footage</h1>
           <p class="page-lead">
-            Upload Midwest-style RGB footage. CropMerge maps the field, scores visual variation, and
-            flags persistent regions worth a closer look — not a crop-health diagnosis.
+            Upload RGB field video or images. CropMerge estimates crop coverage, outlines the analyzed
+            field area, and highlights inspection areas that may deserve a closer look — not a crop-health
+            diagnosis.
           </p>
         </div>
       </div>
@@ -438,8 +465,8 @@ const mediaSrc = computed(() => {
       <div class="disclaimer-box">
         <div class="ico" aria-hidden="true">!</div>
         <div>
-          Flagged regions are <strong>visual differences</strong> from surrounding crop appearance for
-          human review. Not disease, nutrient status, irrigation failure, or plant health.
+          Flagged areas are <strong>differences worth reviewing</strong> in the imagery — not disease,
+          nutrient status, irrigation failure, plant count, or crop health.
         </div>
       </div>
 
@@ -529,18 +556,6 @@ const mediaSrc = computed(() => {
                 </span>
               </div>
               <div class="row row-between">
-                <span class="muted">Segmentation</span>
-                <span class="mono">{{ health?.vision?.segmentationBackend || '—' }}</span>
-              </div>
-              <div class="row row-between">
-                <span class="muted">Embeddings</span>
-                <span class="mono">{{ health?.vision?.dinoBackend || '—' }}</span>
-              </div>
-              <div class="row row-between">
-                <span class="muted">Device</span>
-                <span class="mono">{{ health?.vision?.device || '—' }}</span>
-              </div>
-              <div class="row row-between">
                 <span class="muted">GPU queue</span>
                 <span class="chip" :class="gpuBusy ? 'warn' : 'ok'">
                   <span class="dot" />
@@ -551,6 +566,23 @@ const mediaSrc = computed(() => {
                   }}
                 </span>
               </div>
+              <details>
+                <summary class="muted" style="cursor: pointer; font-size: 0.82rem">Technical system info</summary>
+                <div class="stack" style="gap: 0.45rem; margin-top: 0.5rem">
+                  <div class="row row-between">
+                    <span class="muted">Segmentation</span>
+                    <span class="mono">{{ health?.vision?.segmentationBackend || '—' }}</span>
+                  </div>
+                  <div class="row row-between">
+                    <span class="muted">Feature model</span>
+                    <span class="mono">{{ health?.vision?.dinoBackend || '—' }}</span>
+                  </div>
+                  <div class="row row-between">
+                    <span class="muted">Device</span>
+                    <span class="mono">{{ health?.vision?.device || '—' }}</span>
+                  </div>
+                </div>
+              </details>
               <div class="row row-between">
                 <span class="muted">Database</span>
                 <span class="mono">{{ health?.db?.mode || 'sqlite' }}</span>
@@ -586,7 +618,7 @@ const mediaSrc = computed(() => {
                   <div class="meta">
                     {{ formatWhen(r.createdAt) }}
                     · {{ r.status }}
-                    <template v-if="r.zoneCount != null"> · {{ r.zoneCount }} zones</template>
+                    <template v-if="r.zoneCount != null"> · {{ r.zoneCount }} areas</template>
                   </div>
                 </div>
                 <span class="chip">Open</span>
@@ -652,8 +684,16 @@ const mediaSrc = computed(() => {
         <div>{{ report.disclaimer }}</div>
       </div>
 
+      <div v-if="showLimitedAnalysis(report)" class="disclaimer-box" style="border-color: #b8860b">
+        <div class="ico" aria-hidden="true">i</div>
+        <div>
+          <strong>{{ FIELD_COPY.limitedAnalysisTitle }}</strong>
+          <p style="margin: 0.35rem 0 0">{{ FIELD_COPY.limitedAnalysisBody }}</p>
+        </div>
+      </div>
+
       <div v-if="fieldBrief" class="card flight-brief">
-        <h2 class="section-label">Pilot read</h2>
+        <h2 class="section-label">Summary</h2>
         <p class="flight-brief-text">{{ fieldBrief }}</p>
       </div>
 
@@ -661,45 +701,68 @@ const mediaSrc = computed(() => {
       <div class="card">
         <h2 class="section-label">Field overview</h2>
         <div class="stat-grid">
-          <div class="stat">
-            <span class="label">Field</span>
-            <span class="value">{{ report.field.detected ? 'Detected' : 'None' }}</span>
-            <span class="sub">{{ pct(report.field.meanFieldFraction) }} of frame</span>
+          <div
+            class="stat"
+            :title="report.field.boundary?.tooltip ?? FIELD_COPY.boundaryTooltip"
+          >
+            <span class="label">{{ FIELD_COPY.boundaryLabel }}</span>
+            <span class="value">{{ report.field.boundary?.confidence ?? 'Medium' }}</span>
+            <span class="sub">Vision-estimated analyzed area</span>
+          </div>
+          <div class="stat" :title="FIELD_COPY.cropCoverageTooltip">
+            <span class="label">{{ FIELD_COPY.cropCoverageLabel }}</span>
+            <span class="value">{{ pct(estimatedCropCoverage(report)) }}</span>
+            <span class="sub">Image-based estimate</span>
           </div>
           <div class="stat">
-            <span class="label">Crop area</span>
-            <span class="value">{{ pct(report.field.meanCropCoverage) }}</span>
-            <span class="sub">visible canopy proxy</span>
+            <span class="label">{{ FIELD_COPY.inspectionAreasLabel }}</span>
+            <span class="value">{{ zones.length }} found</span>
+            <span class="sub">Areas worth reviewing</span>
           </div>
           <div class="stat">
-            <span class="label">Exposed soil</span>
-            <span class="value">{{ pct(report.field.meanBareSoil) }}</span>
-            <span class="sub">bare ground share</span>
-          </div>
-          <div class="stat">
-            <span class="label">Zones</span>
-            <span class="value">{{ zones.length }}</span>
-            <span class="sub">patches that stuck around</span>
-          </div>
-          <div class="stat">
-            <span class="label">Priority</span>
+            <span class="label">Highest review priority</span>
             <span class="value">
               <span v-if="highestPriority" class="priority" :class="highestPriority">
-                {{ highestPriority }}
+                {{ reviewPriorityLabel(highestPriority) }}
               </span>
               <span v-else>—</span>
             </span>
-            <span class="sub">worst first on your next pass</span>
+            <span class="sub">Most important first</span>
           </div>
-          <div class="stat">
-            <span class="label">Usable frames</span>
-            <span class="value">{{ report.analysis.framesUsable }}/{{ report.analysis.framesSampled }}</span>
+          <div class="stat" v-if="report.field.rowVisibility">
+            <span class="label">Row visibility</span>
+            <span class="value">{{ report.field.rowVisibility }}</span>
             <span class="sub">
-              {{ report.analysis.segmentationBackend }}
-              <template v-if="report.analysis.usedFallback"> · fallback</template>
+              {{
+                report.field.rowVisibility === 'LOW'
+                  ? 'Gap detail may be limited'
+                  : 'Crop rows visible in imagery'
+              }}
             </span>
           </div>
         </div>
+        <FieldAnalysisLegend />
+        <details class="overview-tech" style="margin-top: 0.85rem">
+          <summary class="muted" style="cursor: pointer; font-size: 0.82rem">View technical details</summary>
+          <div class="stat-grid" style="margin-top: 0.65rem">
+            <div class="stat">
+              <span class="label">Field area analyzed</span>
+              <span class="value">{{
+                pct(report.field.cropCoverage?.analyzableFraction ?? report.field.meanFieldFraction)
+              }}</span>
+            </div>
+            <div class="stat">
+              <span class="label">Exposed soil (estimate)</span>
+              <span class="value">{{
+                pct(report.field.cropCoverage?.bareSoilFraction ?? report.field.meanBareSoil)
+              }}</span>
+            </div>
+            <div class="stat">
+              <span class="label">Usable frames</span>
+              <span class="value">{{ report.analysis.framesUsable }}/{{ report.analysis.framesSampled }}</span>
+            </div>
+          </div>
+        </details>
         <div class="row" style="margin-top: 0.85rem">
           <span class="chip" :class="report.field.roadPathDetected ? 'ok' : ''">
             Road/path {{ report.field.roadPathDetected ? 'yes' : 'no' }}
@@ -761,9 +824,10 @@ const mediaSrc = computed(() => {
             </div>
           </div>
 
-          <div class="media-frame">
+          <div ref="mediaFrameEl" class="media-frame">
             <video
               v-if="mediaTab === 'video' && mediaSrc"
+              ref="annotatedVideoEl"
               :key="mediaSrc"
               controls
               playsinline
@@ -787,7 +851,7 @@ const mediaSrc = computed(() => {
           </div>
           <p class="media-caption">
             <template v-if="mediaTab === 'heatmap'">
-              Where the field stops matching itself — image-relative, not GPS, not a health map
+              Where the field looks most different from itself in the imagery — not GPS, not a health map
             </template>
             <template v-else-if="mediaTab === 'montage'">
               Snapshot quilt from the flight — good for spotting row patterns at a glance
@@ -804,11 +868,19 @@ const mediaSrc = computed(() => {
         <div class="card zone-detail" v-if="selectedZone">
           <div class="row row-between" style="margin-bottom: 0.75rem">
             <div>
-              <h2 class="section-label" style="margin-bottom: 0.35rem">Selected zone</h2>
+              <h2 class="section-label" style="margin-bottom: 0.35rem">
+                {{ inspectionAreaTitle(selectedAreaIndex) }}
+              </h2>
+              <p
+                class="zone-loc"
+                style="margin-bottom: 0.35rem; font-weight: 600; font-size: 1.05rem"
+                :title="inspectionIssueTooltip(selectedZone)"
+              >
+                {{ inspectionIssueLabel(selectedZone) }}
+              </p>
               <div class="row">
-                <span class="zone-id" style="font-size: 1.1rem">{{ selectedZone.id }}</span>
                 <span class="priority" :class="selectedZone.reviewPriority">
-                  {{ selectedZone.reviewPriority }}
+                  Review priority: {{ reviewPriorityLabel(selectedZone.reviewPriority).toUpperCase() }}
                 </span>
               </div>
             </div>
@@ -819,43 +891,57 @@ const mediaSrc = computed(() => {
           </div>
 
           <p class="zone-loc" style="margin-bottom: 0.85rem">
-            {{ selectedZone.relativeLocation }} · frames {{ selectedZone.framesSeen }} ·
-            {{ selectedZone.firstSeenSec.toFixed(1) }}s–{{ selectedZone.lastSeenSec.toFixed(1) }}s
+            {{ locationLabel(selectedZone.relativeLocation) }} field
+            <template v-if="formatObservations(selectedZone)">
+              · {{ formatObservations(selectedZone) }}
+            </template>
           </p>
 
-          <div class="zone-metrics">
-            <div class="zone-metric">
-              <label>Visual anomaly</label>
-              <strong>{{ selectedZone.anomalyScore.toFixed(2) }}</strong>
-              <ScoreBar :value="selectedZone.anomalyScore" :tone="selectedZone.reviewPriority" />
-            </div>
-            <div class="zone-metric">
-              <label>Persistence</label>
-              <strong>{{ selectedZone.persistenceScore.toFixed(2) }}</strong>
-              <ScoreBar :value="selectedZone.persistenceScore" />
-            </div>
-            <div class="zone-metric">
-              <label>Review score</label>
-              <strong>{{ combinedReviewScore(selectedZone).toFixed(2) }}</strong>
-              <span class="muted" style="font-size: 0.72rem">65% oddity + 35% stickiness</span>
-            </div>
-          </div>
-
-          <h3 class="section-label" style="margin-top: 1.15rem">What we saw</h3>
+          <h3 class="section-label" style="margin-top: 0.5rem">Why it was flagged</h3>
           <ul>
-            <li v-for="(r, i) in selectedZone.reasons" :key="i">{{ r }}</li>
+            <li v-for="(r, i) in formatInspectionReasons(selectedZone)" :key="i">{{ r }}</li>
           </ul>
 
           <div class="reco">
-            <strong>Next pass</strong>
+            <strong>Recommended action</strong>
             {{ selectedZone.recommendation }}
           </div>
+
+          <details class="overview-tech" style="margin-top: 1rem">
+            <summary class="muted" style="cursor: pointer">View technical details</summary>
+            <dl class="tech-dl" style="margin-top: 0.65rem">
+              <dt>Structural score</dt>
+              <dd>{{ (selectedZone.structuralAnomalyScore ?? 0).toFixed(2) }}</dd>
+              <dt>Appearance score</dt>
+              <dd>{{ (selectedZone.appearanceAnomalyScore ?? selectedZone.anomalyScore).toFixed(2) }}</dd>
+              <dt>Persistence</dt>
+              <dd>
+                <template
+                  v-if="selectedZone.persistentObservations != null && selectedZone.totalObservations != null"
+                >
+                  {{ selectedZone.persistentObservations }} / {{ selectedZone.totalObservations }} observations
+                </template>
+                <template v-else>{{ selectedZone.persistenceScore.toFixed(2) }}</template>
+              </dd>
+              <template v-if="selectedZone.evidence?.cropCoverageDelta != null">
+                <dt>Crop coverage delta</dt>
+                <dd>{{ Math.round(selectedZone.evidence.cropCoverageDelta * 100) }}%</dd>
+              </template>
+              <template v-if="selectedZone.evidence?.soilExposureDelta != null">
+                <dt>Soil exposure delta</dt>
+                <dd>+{{ Math.round(selectedZone.evidence.soilExposureDelta * 100) }}%</dd>
+              </template>
+              <dt>Internal ID</dt>
+              <dd class="mono">{{ selectedZone.id }}</dd>
+            </dl>
+          </details>
         </div>
 
         <div v-else class="card">
-          <h2 class="section-label">Selected zone</h2>
+          <h2 class="section-label">{{ FIELD_COPY.inspectionAreasLabel }}</h2>
           <p class="muted" style="margin: 0">
-            No persistent inspection zones. Field may be visually uniform, or no field was detected.
+            <strong>{{ FIELD_COPY.emptyInspectionAreasTitle }}</strong><br />
+            {{ FIELD_COPY.emptyInspectionAreasBody }}
           </p>
         </div>
       </div>
@@ -872,21 +958,22 @@ const mediaSrc = computed(() => {
         />
       </div>
 
-      <!-- Zone list -->
+      <!-- Inspection area list -->
       <div class="card" v-if="zones.length">
         <div class="card-head">
           <h2 class="section-label" style="margin: 0">
-            Inspection zones
+            {{ FIELD_COPY.inspectionAreasLabel }}
             <span class="muted" style="letter-spacing: 0; text-transform: none; font-weight: 500">
-              · {{ zones.length }}
+              · {{ zones.length }} found
             </span>
           </h2>
         </div>
         <div class="zone-list" style="max-height: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.65rem">
           <ZoneCard
-            v-for="z in zones"
+            v-for="(z, idx) in zones"
             :key="z.id"
             :zone="z"
+            :area-index="idx"
             :selected="z.id === selectedZone?.id"
             @select="selectedZoneId = z.id"
           />

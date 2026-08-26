@@ -60,6 +60,20 @@ temporal:
   iou_link_threshold: 0.15
   shadow_suppress: true
 
+structural:
+  weights:
+    occupancy_deficit: 0.30
+    continuity_evidence: 0.25
+    gap_extent: 0.20
+    fragmentation: 0.15
+    soil_exposure: 0.10
+  edge_exclusion_px: 12
+  row_visibility_min_coherence: 0.12
+
+boundary:
+  min_component_frac: 0.02
+  max_hole_fill_frac: 0.008
+
 registration:
   max_corners: 500
   match_ratio: 0.75

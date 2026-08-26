@@ -39,7 +39,7 @@ export default defineNuxtConfig({
         {
           name: 'description',
           content:
-            'RGB drone video → field segmentation → visual anomaly mapping → farmer review',
+            'RGB drone video → field review → inspection areas for farmer review',
         },
       ],
     },

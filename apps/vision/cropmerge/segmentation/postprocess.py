@@ -24,27 +24,70 @@ def resolve_overlaps(masks: list[SegmentMask], shape: tuple[int, int]) -> np.nda
     return label_map
 
 
-def build_field_mask(label_map: np.ndarray, union_classes: list[str] | None = None) -> np.ndarray:
+def build_field_mask(label_map: np.ndarray, union_classes: list[str] | None = None, cfg: dict | None = None) -> np.ndarray:
+    """
+    Conservative analysis field boundary — analyzable region, not property boundary.
+
+    Removes tiny speckle, fills only small internal holes, preserves large gaps
+    (missing crop / roads) and avoids aggressive closing.
+    """
     union = set(union_classes or ["CROP", "BARE_SOIL", "FIELD"])
     field = np.isin(label_map, list(union))
-    # Morphological clean
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    bcfg = (cfg or {}).get("boundary", {})
+    min_comp_frac = float(bcfg.get("min_component_frac", 0.02))
+    max_hole_frac = float(bcfg.get("max_hole_fill_frac", 0.008))
+
+    h, w = field.shape
+    total = max(h * w, 1)
+    min_area = int(min_comp_frac * total)
+    max_hole = int(max_hole_frac * total)
+
     field_u8 = field.astype(np.uint8) * 255
-    field_u8 = cv2.morphologyEx(field_u8, cv2.MORPH_CLOSE, k, iterations=2)
-    field_u8 = cv2.morphologyEx(field_u8, cv2.MORPH_OPEN, k, iterations=1)
-    # Largest component preference
+    # Light open only — remove 1–2 px speckle without closing large gaps
+    k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    field_u8 = cv2.morphologyEx(field_u8, cv2.MORPH_OPEN, k3, iterations=1)
+
+    # Fill only small internal holes
+    inv = cv2.bitwise_not(field_u8)
+    n_h, lab_h, stats_h, _ = cv2.connectedComponentsWithStats(inv, 8)
+    for i in range(1, n_h):
+        area = stats_h[i, cv2.CC_STAT_AREA]
+        if area <= max_hole:
+            # hole not touching image border → internal
+            x, y, bw, bh, _ = stats_h[i]
+            touches_border = x <= 0 or y <= 0 or x + bw >= w or y + bh >= h
+            if not touches_border:
+                field_u8[lab_h == i] = 255
+
+    # Drop tiny disconnected field components
     n, labels, stats, _ = cv2.connectedComponentsWithStats((field_u8 > 0).astype(np.uint8), 8)
     if n <= 1:
         return field_u8 > 0
     areas = stats[1:, cv2.CC_STAT_AREA]
-    keep = 1 + int(np.argmax(areas))
-    # Keep components >= 15% of largest
-    thr = 0.15 * areas.max()
+    largest = int(areas.max()) if len(areas) else 0
+    keep_thr = max(min_area, int(0.15 * largest))
     out = np.zeros_like(field_u8, dtype=bool)
     for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] >= thr:
+        if stats[i, cv2.CC_STAT_AREA] >= keep_thr:
             out[labels == i] = True
     return out
+
+
+def boundary_confidence(field_mask: np.ndarray, label_map: np.ndarray | None = None) -> str:
+    """High / Medium / Low — no fake numeric precision."""
+    if not np.any(field_mask):
+        return "Low"
+    frac = float(np.mean(field_mask))
+    if frac < 0.05 or frac > 0.98:
+        return "Low"
+    if label_map is not None:
+        edge = cv2.Canny(field_mask.astype(np.uint8) * 255, 50, 150)
+        edge_frac = float(np.sum(edge > 0)) / max(np.sum(field_mask), 1)
+        if edge_frac > 0.35:
+            return "Medium"
+    if frac >= 0.12:
+        return "High"
+    return "Medium"
 
 
 def finalize_segmentation(seg: FrameSegmentation, cfg: dict) -> FrameSegmentation:
@@ -56,7 +99,7 @@ def finalize_segmentation(seg: FrameSegmentation, cfg: dict) -> FrameSegmentatio
     shape = seg.masks[0].mask.shape[:2] if seg.masks else seg.label_map.shape[:2]
     seg.label_map = resolve_overlaps(seg.masks, shape)
     union = cfg.get("segmentation", {}).get("field_union_classes", ["CROP", "BARE_SOIL", "FIELD"])
-    seg.field_mask = build_field_mask(seg.label_map, union)
+    seg.field_mask = build_field_mask(seg.label_map, union, cfg)
     seg.crop_mask = seg.label_map == SemanticClass.CROP.value
     return seg
 

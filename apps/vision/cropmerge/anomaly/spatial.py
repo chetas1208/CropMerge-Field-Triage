@@ -223,6 +223,7 @@ def score_frame(
         if iforest_weight > 0:
             contrib["isolation"] = float(iforest_u[i]) * iforest_weight
         score = float(np.clip(sum(contrib.values()) / max(wsum, 1e-6), 0.0, 1.0))
+        cell.appearance_anomaly_score = score
         cell.anomaly_score = score
         cell.contributions = contrib
         heat[cell.row, cell.col] = score
@@ -242,6 +243,7 @@ def score_frame(
                 cell.anomaly_score = float(
                     0.65 * cell.anomaly_score + 0.35 * sm[cell.row, cell.col]
                 )
+                cell.appearance_anomaly_score = cell.anomaly_score
                 heat[cell.row, cell.col] = cell.anomaly_score
 
     return cells, heat

@@ -7,7 +7,7 @@ TMP="$(mktemp)"
 ( crontab -l 2>/dev/null | grep -v "$MARKER" || true ) >"$TMP"
 cat >>"$TMP" <<EOF
 @reboot sleep 45 && $ROOT/deploy/scripts/start-all.sh >> $ROOT/deploy/local/reboot.log 2>&1 $MARKER
-*/5 * * * * $ROOT/deploy/scripts/watchdog.sh >> $ROOT/deploy/local/watchdog.log 2>&1 $MARKER
+*/1 * * * * $ROOT/deploy/scripts/watchdog.sh >> $ROOT/deploy/local/watchdog.log 2>&1 $MARKER
 EOF
 crontab "$TMP"
 rm -f "$TMP"

@@ -42,4 +42,4 @@ def test_recommendation_mentions_review_score():
     )
     assert "review score" in text.lower()
     assert "northwest" in text
-    assert "8 frames" in text
+    assert "8 observations" in text

@@ -65,10 +65,30 @@ Deploy the **existing** local system without rewriting the CV pipeline. Vercel s
 | `start-vision.sh` | Vision API on `127.0.0.1:8001` (GPU, sam2/dinov2) |
 | `start-tunnel.sh` | Cloudflare quick tunnel → vision |
 | `start-all.sh` | Both |
-| `watchdog.sh` | Restarts anything unhealthy (cron every 5 min) |
+| `watchdog.sh` | Restarts anything unhealthy (cron every 1 min) |
+| `tunnel-lock.sh` | Freeze quick-tunnel URL for N days (local ops lock) |
 | `tail-api-logs.sh` | Follow API + tunnel logs |
 
 Logs: `deploy/local/reboot.log`, `deploy/local/watchdog.log`
+
+### Quick tunnel lifespan (`trycloudflare.com`)
+
+Cloudflare **does not** offer a 1-month setting on quick tunnels. There is no SLA; the URL changes whenever `cloudflared` restarts, and Cloudflare may delete tunnels disconnected for several minutes.
+
+| Tunnel type | URL stability | Max practical span |
+| --- | --- | --- |
+| **Quick** (`trycloudflare.com`) | Random; changes on restart | Hours–days while process stays up; **not guaranteed** |
+| **Named** (`vision.yourdomain.com`) | Fixed DNS | **Months+** (persists across restarts) |
+
+This repo uses a **local 30-day lock** so our scripts do not restart or rotate the URL unless it actually dies:
+
+```bash
+./deploy/scripts/tunnel-lock.sh status
+# re-lock after expiry:
+./deploy/scripts/tunnel-lock.sh init 30 "$(cat deploy/local/tunnel.url)"
+```
+
+For a true fixed hostname with no monthly churn, use a [named tunnel](./cloudflare/README.md).
 
 ## GPU
 

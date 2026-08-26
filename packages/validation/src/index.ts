@@ -39,13 +39,28 @@ export const zoneEvidenceSchema = z.object({
   textureDifference: z.number().optional(),
   embeddingDifference: z.number().optional(),
   persistence: z.number().optional(),
+  appearanceAnomalyScore: z.number().optional(),
+  structuralAnomalyScore: z.number().optional(),
+  rowContinuityBefore: z.number().optional(),
+  rowContinuityAfter: z.number().optional(),
+  gapExtentNormalized: z.number().optional(),
+  soilExposureDelta: z.number().optional(),
+  fragmentationScore: z.number().optional(),
+  registrationConfidence: z.number().optional(),
 })
 
 export const inspectionZoneSchema = z.object({
   id: z.string(),
   reviewPriority: reviewPrioritySchema,
   anomalyScore: z.number().min(0).max(1),
+  appearanceAnomalyScore: z.number().min(0).max(1).optional(),
+  structuralAnomalyScore: z.number().min(0).max(1).optional(),
+  reviewScore: z.number().min(0).max(1).optional(),
   persistenceScore: z.number().min(0).max(1),
+  primaryType: z.string().optional(),
+  primarySignalLabel: z.string().optional(),
+  persistentObservations: z.number().int().optional(),
+  totalObservations: z.number().int().optional(),
   firstSeenMs: z.number(),
   lastSeenMs: z.number(),
   firstSeenSec: z.number(),
@@ -62,6 +77,23 @@ export const inspectionZoneSchema = z.object({
   evidence: zoneEvidenceSchema,
   reasons: z.array(z.string()),
   recommendation: z.string(),
+})
+
+export const cropCoverageDetailSchema = z.object({
+  estimatedFraction: z.number(),
+  analyzableFraction: z.number(),
+  segmentationConfidence: z.number().nullable().optional(),
+  uncertainFraction: z.number().optional(),
+  bareSoilFraction: z.number().optional(),
+  nonCropFraction: z.number().optional(),
+})
+
+export const fieldBoundaryInfoSchema = z.object({
+  label: z.string().optional(),
+  source: z.string().optional(),
+  confidence: z.string().optional(),
+  derivation: z.string().optional(),
+  tooltip: z.string().optional(),
 })
 
 export const frameQualitySchema = z.object({
@@ -106,6 +138,9 @@ export const fieldSummarySchema = z.object({
   waterDetected: z.boolean(),
   infrastructureDetected: z.boolean(),
   meanFieldFraction: z.number(),
+  cropCoverage: cropCoverageDetailSchema.nullish(),
+  boundary: fieldBoundaryInfoSchema.nullish(),
+  rowVisibility: z.string().optional(),
 })
 
 export const analysisSummarySchema = z.object({

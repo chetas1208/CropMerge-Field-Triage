@@ -35,6 +35,17 @@ class SemanticClass(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class InspectionZoneType(str, Enum):
+    STAND_GAP = "stand_gap"
+    SPARSE_CANOPY = "sparse_canopy"
+    EXPOSED_SOIL = "exposed_soil"
+    COLOR_VARIATION = "color_variation"
+    TEXTURE_VARIATION = "texture_variation"
+    WATER_LIKE_REGION = "water_like_region"
+    ROW_DISCONTINUITY = "row_discontinuity"
+    GENERAL_VISUAL_VARIATION = "general_visual_variation"
+
+
 class ZoneEvidence(BaseModel):
     crop_coverage_delta: float | None = None
     color_difference: float | None = None
@@ -42,13 +53,28 @@ class ZoneEvidence(BaseModel):
     texture_difference: float | None = None
     embedding_difference: float | None = None
     persistence: float | None = None
+    appearance_anomaly_score: float | None = None
+    structural_anomaly_score: float | None = None
+    row_continuity_before: float | None = None
+    row_continuity_after: float | None = None
+    gap_extent_normalized: float | None = None
+    soil_exposure_delta: float | None = None
+    fragmentation_score: float | None = None
+    registration_confidence: float | None = None
 
 
 class InspectionZone(BaseModel):
     id: str
     review_priority: ReviewPriority
     anomaly_score: float = Field(ge=0, le=1)
+    appearance_anomaly_score: float = Field(default=0.0, ge=0, le=1)
+    structural_anomaly_score: float = Field(default=0.0, ge=0, le=1)
+    review_score: float = Field(default=0.0, ge=0, le=1)
     persistence_score: float = Field(ge=0, le=1)
+    primary_type: InspectionZoneType = InspectionZoneType.GENERAL_VISUAL_VARIATION
+    primary_signal_label: str = "General visual variation"
+    persistent_observations: int = 0
+    total_observations: int = 0
     first_seen_ms: float
     last_seen_ms: float
     first_seen_sec: float
@@ -60,6 +86,40 @@ class InspectionZone(BaseModel):
     evidence: ZoneEvidence
     reasons: list[str]
     recommendation: str
+
+
+class CropCoverageDetail(BaseModel):
+    estimated_fraction: float
+    analyzable_fraction: float
+    segmentation_confidence: float | None = None
+    uncertain_fraction: float = 0.0
+    bare_soil_fraction: float = 0.0
+    non_crop_fraction: float = 0.0
+
+
+class FieldBoundaryInfo(BaseModel):
+    label: str = "Analysis Field Boundary"
+    source: str = "Vision estimate"
+    confidence: str = "Medium"
+    derivation: str = "Segmentation union of crop, bare soil, and field classes with conservative cleanup"
+    tooltip: str = (
+        "Estimated boundary of the field region currently included in the visual analysis. "
+        "This is derived from imagery and is not a surveyed, parcel, or property boundary."
+    )
+
+
+class FieldSummary(BaseModel):
+    detected: bool
+    mean_crop_coverage: float
+    mean_bare_soil: float
+    road_path_detected: bool
+    tree_vegetation_detected: bool
+    water_detected: bool
+    infrastructure_detected: bool
+    mean_field_fraction: float
+    crop_coverage: CropCoverageDetail | None = None
+    boundary: FieldBoundaryInfo | None = None
+    row_visibility: str = "LOW"
 
 
 class FrameQuality(BaseModel):
@@ -87,17 +147,6 @@ class VideoSourceMeta(BaseModel):
     orientation: int | None = None
     created_at: str | None = None
     gps: dict[str, float | None] | None = None
-
-
-class FieldSummary(BaseModel):
-    detected: bool
-    mean_crop_coverage: float
-    mean_bare_soil: float
-    road_path_detected: bool
-    tree_vegetation_detected: bool
-    water_detected: bool
-    infrastructure_detected: bool
-    mean_field_fraction: float
 
 
 class AnalysisSummary(BaseModel):
@@ -177,13 +226,44 @@ class FieldTriageReport(BaseModel):
                 "waterDetected": self.field.water_detected,
                 "infrastructureDetected": self.field.infrastructure_detected,
                 "meanFieldFraction": self.field.mean_field_fraction,
+                "cropCoverage": (
+                    {
+                        "estimatedFraction": self.field.crop_coverage.estimated_fraction,
+                        "analyzableFraction": self.field.crop_coverage.analyzable_fraction,
+                        "segmentationConfidence": self.field.crop_coverage.segmentation_confidence,
+                        "uncertainFraction": self.field.crop_coverage.uncertain_fraction,
+                        "bareSoilFraction": self.field.crop_coverage.bare_soil_fraction,
+                        "nonCropFraction": self.field.crop_coverage.non_crop_fraction,
+                    }
+                    if self.field.crop_coverage
+                    else None
+                ),
+                "boundary": (
+                    {
+                        "label": self.field.boundary.label,
+                        "source": self.field.boundary.source,
+                        "confidence": self.field.boundary.confidence,
+                        "derivation": self.field.boundary.derivation,
+                        "tooltip": self.field.boundary.tooltip,
+                    }
+                    if self.field.boundary
+                    else None
+                ),
+                "rowVisibility": self.field.row_visibility,
             },
             "inspectionZones": [
                 {
                     "id": z.id,
                     "reviewPriority": z.review_priority.value,
                     "anomalyScore": z.anomaly_score,
+                    "appearanceAnomalyScore": z.appearance_anomaly_score,
+                    "structuralAnomalyScore": z.structural_anomaly_score,
+                    "reviewScore": z.review_score,
                     "persistenceScore": z.persistence_score,
+                    "primaryType": z.primary_type.value,
+                    "primarySignalLabel": z.primary_signal_label,
+                    "persistentObservations": z.persistent_observations,
+                    "totalObservations": z.total_observations,
                     "firstSeenMs": z.first_seen_ms,
                     "lastSeenMs": z.last_seen_ms,
                     "firstSeenSec": z.first_seen_sec,
@@ -199,6 +279,14 @@ class FieldTriageReport(BaseModel):
                         "textureDifference": z.evidence.texture_difference,
                         "embeddingDifference": z.evidence.embedding_difference,
                         "persistence": z.evidence.persistence,
+                        "appearanceAnomalyScore": z.evidence.appearance_anomaly_score,
+                        "structuralAnomalyScore": z.evidence.structural_anomaly_score,
+                        "rowContinuityBefore": z.evidence.row_continuity_before,
+                        "rowContinuityAfter": z.evidence.row_continuity_after,
+                        "gapExtentNormalized": z.evidence.gap_extent_normalized,
+                        "soilExposureDelta": z.evidence.soil_exposure_delta,
+                        "fragmentationScore": z.evidence.fragmentation_score,
+                        "registrationConfidence": z.evidence.registration_confidence,
                     },
                     "reasons": z.reasons,
                     "recommendation": z.recommendation,

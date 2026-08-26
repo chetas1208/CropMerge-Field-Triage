@@ -743,6 +743,21 @@ select {
   margin: 0.35rem 0;
   color: var(--text-soft);
 }
+
+.tech-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.82rem;
+}
+.tech-dl dt {
+  color: var(--muted, #8a8a8a);
+  margin: 0;
+}
+.tech-dl dd {
+  margin: 0;
+}
+
 .reco {
   margin: 1rem 0 0;
   padding: 0.85rem 1rem;
@@ -1070,6 +1085,8 @@ select {
   display: flex;
   gap: 0.5rem;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   padding: 0.85rem 0.15rem 0.35rem;
   margin-top: 0.35rem;
   scroll-snap-type: x proximity;
