@@ -81,6 +81,8 @@ uploads/
 !apps/vision/samples/**/*.jpeg
 !apps/vision/samples/**/*.png
 !apps/web/public/samples/**/*
+!apps/web/public/demo/**/*
+!apps/web/public/demo/**/*
 # Drop bulky unedited source downloads under samples/real/
 apps/vision/samples/real/source_*
 

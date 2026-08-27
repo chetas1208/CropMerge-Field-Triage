@@ -46,6 +46,17 @@ const uploadProgress = ref<number | null>(null)
 const activeUploadId = ref<string | null>(null)
 const abortController = ref<AbortController | null>(null)
 const { request } = useVisionApi()
+const {
+  isDemo,
+  demoCases,
+  loadManifest,
+  fetchDemoJob,
+  simulateDemoRun,
+  setMode,
+  manifestError,
+} = useDemoMode()
+const selectedDemoId = ref<string | null>(null)
+const demoResult = ref(false)
 
 useViewportPlaybackPause(mediaFrameEl, {
   threshold: 0.3,
@@ -70,8 +81,19 @@ const PIPELINE = [
 ]
 
 onMounted(async () => {
-  await Promise.all([refreshHealth(), refreshRecent()])
+  await Promise.all([refreshHealth(), refreshRecent(), loadManifest()])
 })
+
+function demoCaseForSample(sampleId: string) {
+  if (sampleId === 'vid') return 'drone-field-video'
+  if (sampleId === 'img') return 'soybean-field-image'
+  return null
+}
+
+function selectDemoSample(sampleId: string) {
+  selectedDemoId.value = demoCaseForSample(sampleId)
+  error.value = ''
+}
 
 async function refreshHealth() {
   try {
@@ -146,6 +168,10 @@ const highestPriority = computed(() => {
 })
 
 const visionOnline = computed(() => health.value?.vision?.status === 'ok')
+const canAnalyze = computed(() => {
+  if (isDemo.value) return Boolean(selectedDemoId.value)
+  return Boolean(file.value) && visionOnline.value
+})
 const gpuBusy = computed(() => Boolean(health.value?.vision?.gpuBusy))
 const gpuStatusMessage = computed(() => {
   const vision = health.value?.vision
@@ -257,6 +283,14 @@ const SAMPLE_INPUTS = [
 const loadingSample = ref<string | null>(null)
 
 async function useSample(sample: (typeof SAMPLE_INPUTS)[number]) {
+  if (isDemo.value) {
+    const demoId = demoCaseForSample(sample.id)
+    if (demoId) {
+      selectedDemoId.value = demoId
+      error.value = ''
+      return
+    }
+  }
   loadingSample.value = sample.id
   error.value = ''
   try {
@@ -264,11 +298,55 @@ async function useSample(sample: (typeof SAMPLE_INPUTS)[number]) {
     if (!res.ok) throw new Error(`Sample download failed (${res.status})`)
     const blob = await res.blob()
     setFile(new File([blob], sample.filename, { type: sample.mime }))
+    selectedDemoId.value = null
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
     loadingSample.value = null
   }
+}
+
+async function runDemoAnalysis(demoId: string) {
+  loading.value = true
+  error.value = ''
+  job.value = null
+  demoResult.value = true
+  uploadProgress.value = null
+  activeUploadId.value = null
+  abortController.value = new AbortController()
+  const demoCase = demoCases.value.find((item) => item.id === demoId)
+  mediaTab.value = demoCase?.kind === 'image' ? 'heatmap' : 'video'
+  try {
+    await simulateDemoRun((stage, progress, message) => {
+      job.value = {
+        id: demoCase?.runId || demoId,
+        status: stage === 'completed' ? 'completed' : 'processing',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        filename: demoCase?.inputFilename || demoId,
+        progress,
+        stage,
+        message,
+        report: job.value?.report ?? null,
+        artifactUrls: job.value?.artifactUrls,
+      }
+    }, abortController.value.signal)
+    job.value = await fetchDemoJob(demoId)
+    selectedDemoId.value = demoId
+  } catch (e: unknown) {
+    if ((e as { name?: string }).name !== 'AbortError') {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+    demoResult.value = false
+  } finally {
+    loading.value = false
+    abortController.value = null
+  }
+}
+
+async function openDemoCase(demoId: string) {
+  selectedDemoId.value = demoId
+  await runDemoAnalysis(demoId)
 }
 
 type UploadResponse = {
@@ -352,13 +430,21 @@ async function waitForAnalysis(id: string, signal: AbortSignal) {
 }
 
 async function analyze() {
+  if (isDemo.value) {
+    if (!selectedDemoId.value) {
+      error.value = 'Choose a demo flight below.'
+      return
+    }
+    await runDemoAnalysis(selectedDemoId.value)
+    return
+  }
   if (!file.value) {
     error.value = 'Choose a drone video or field image first.'
     return
   }
   if (!visionOnline.value) {
     error.value = health.value?.vision?.gpuMessage
-      || 'Vision engine is offline. Start it on port 8001, then try again.'
+      || 'Vision engine is offline. Switch to Demo mode or start the server on port 8001.'
     return
   }
   if (gpuBusy.value && (health.value?.vision?.queueDepth ?? 0) >= (health.value?.vision?.maxQueueDepth ?? 3)) {
@@ -368,6 +454,7 @@ async function analyze() {
   loading.value = true
   error.value = ''
   job.value = null
+  demoResult.value = false
   uploadProgress.value = 0
   activeUploadId.value = null
   abortController.value = new AbortController()
@@ -407,7 +494,15 @@ async function analyze() {
 async function openRecent(id: string) {
   error.value = ''
   loading.value = true
+  demoResult.value = false
   try {
+    if (isDemo.value) {
+      const match = demoCases.value.find((item) => item.runId === id)
+      if (match) {
+        await runDemoAnalysis(match.id)
+        return
+      }
+    }
     job.value = await request<AnalysisJob>(`/vision/analyses/${id}`)
     mediaTab.value = 'video'
   } catch (e: unknown) {
@@ -434,9 +529,24 @@ function reset() {
   job.value = null
   file.value = null
   selectedZoneId.value = null
+  selectedDemoId.value = null
+  demoResult.value = false
   error.value = ''
   if (fileInput.value) fileInput.value.value = ''
 }
+
+const demoRecent = computed(() =>
+  demoCases.value.map((item) => ({
+    id: item.runId,
+    demoId: item.id,
+    status: 'completed',
+    createdAt: 'Demo',
+    filename: item.inputFilename,
+    subtitle: item.subtitle,
+    zoneCount: item.zoneCount,
+    fieldDetected: true,
+  })),
+)
 
 const mediaSrc = computed(() => {
   if (mediaTab.value === 'heatmap') return artifactUrl('heatmap.png')
@@ -470,6 +580,29 @@ const mediaSrc = computed(() => {
         </div>
       </div>
 
+      <div v-if="isDemo" class="demo-banner">
+        <div class="ico" aria-hidden="true">D</div>
+        <div>
+          <strong>Demo mode</strong> — pre-computed analyses stored in this repo on GitHub.
+          No GPU or vision server required. Pick a flight below and click
+          <strong>View demo analysis</strong>.
+          <span v-if="manifestError" class="muted" style="display: block; margin-top: 0.35rem">
+            {{ manifestError }}
+          </span>
+        </div>
+      </div>
+
+      <div v-else-if="!visionOnline" class="demo-banner">
+        <div class="ico" aria-hidden="true">!</div>
+        <div>
+          Vision engine is offline. Switch to <strong>Demo</strong> to explore stored field reviews,
+          or start the server on port 8001 for live analysis.
+          <button type="button" class="btn btn-ghost btn-sm" style="margin-top: 0.55rem" @click="setMode('demo')">
+            Switch to Demo
+          </button>
+        </div>
+      </div>
+
       <div class="grid-hero">
         <div
           class="upload-drop"
@@ -499,39 +632,52 @@ const mediaSrc = computed(() => {
             Video .mp4 · .mov · .m4v · Image .jpg · .png · .webp · 2 FPS sample
           </p>
 
-          <div v-if="file" class="file-chip" @click.stop>
+          <div v-if="file && !isDemo" class="file-chip" @click.stop>
             <span>{{ file.name }}</span>
             <span class="muted">{{ formatBytes(file.size) }}</span>
             <span v-if="isImageUpload" class="muted">image</span>
+          </div>
+          <div v-else-if="isDemo && selectedDemoId" class="file-chip" @click.stop>
+            <span>{{ demoCases.find((d) => d.id === selectedDemoId)?.title }}</span>
+            <span class="muted">stored demo</span>
           </div>
 
           <div class="hero-actions" @click.stop>
             <button
               type="button"
               class="btn btn-primary"
-              :disabled="!file || !visionOnline || loading"
+              :disabled="!canAnalyze || loading"
               @click="analyze"
             >
-              Analyze field
+              {{ isDemo ? 'View demo analysis' : 'Analyze field' }}
             </button>
-            <button type="button" class="btn btn-ghost" @click="openFilePicker">
+            <button v-if="!isDemo" type="button" class="btn btn-ghost" @click="openFilePicker">
               Browse files
             </button>
           </div>
 
           <div class="sample-row" @click.stop>
-            <span class="muted" style="font-size: 0.78rem">Try a real sample:</span>
+            <span class="muted" style="font-size: 0.78rem">
+              {{ isDemo ? 'Demo flights:' : 'Try a real sample:' }}
+            </span>
             <button
               v-for="s in SAMPLE_INPUTS"
               :key="s.id"
               type="button"
               class="btn btn-ghost btn-sm"
+              :class="{ 'btn-primary': isDemo && selectedDemoId === demoCaseForSample(s.id) }"
               :disabled="!!loadingSample || loading"
-              @click="useSample(s)"
+              @click="isDemo ? selectDemoSample(s.id) : useSample(s)"
             >
               {{ loadingSample === s.id ? 'Loading…' : s.label }}
             </button>
-            <a class="muted mono" href="/samples/SOURCES.md" target="_blank" rel="noopener" style="font-size: 0.72rem">
+            <a
+              class="muted mono"
+              :href="isDemo ? '/demo/SOURCES.md' : '/samples/SOURCES.md'"
+              target="_blank"
+              rel="noopener"
+              style="font-size: 0.72rem"
+            >
               sources
             </a>
           </div>
@@ -591,20 +737,46 @@ const mediaSrc = computed(() => {
             <p v-if="gpuStatusMessage" class="warn-banner" style="margin-top: 1rem; margin-bottom: 0">
               {{ gpuStatusMessage }}
             </p>
-            <p v-if="!visionOnline" class="error-banner" style="margin-top: 1rem; margin-bottom: 0">
+            <p v-if="!visionOnline && !isDemo" class="error-banner" style="margin-top: 1rem; margin-bottom: 0">
               Start vision:
               <code class="mono">cd apps/vision && uvicorn api.main:app --port 8001</code>
+            </p>
+            <p v-else-if="isDemo" class="muted" style="margin-top: 1rem; margin-bottom: 0; font-size: 0.85rem">
+              Demo uses static artifacts from <code class="mono">/demo/</code> on GitHub — no live GPU.
             </p>
           </div>
 
           <div class="card">
             <div class="card-head">
-              <h2 class="section-label" style="margin: 0">Recent analyses</h2>
-              <button type="button" class="btn btn-ghost btn-sm" @click="refreshRecent">Refresh</button>
+              <h2 class="section-label" style="margin: 0">{{ isDemo ? 'Demo flights' : 'Recent analyses' }}</h2>
+              <button v-if="!isDemo" type="button" class="btn btn-ghost btn-sm" @click="refreshRecent">
+                Refresh
+              </button>
             </div>
-            <p v-if="!recent.length" class="muted" style="margin: 0">
+            <p v-if="isDemo && !demoCases.length" class="muted" style="margin: 0">
+              Demo manifest not loaded.
+            </p>
+            <p v-else-if="!isDemo && !recent.length" class="muted" style="margin: 0">
               No saved jobs yet. Run an analysis to populate the local database.
             </p>
+            <div v-else-if="isDemo" class="recent-list">
+              <button
+                v-for="r in demoRecent.slice(0, 6)"
+                :key="r.id"
+                type="button"
+                class="recent-item"
+                @click="openDemoCase(r.demoId)"
+              >
+                <div style="min-width: 0">
+                  <div class="name">{{ r.filename }}</div>
+                  <div class="meta">
+                    {{ r.subtitle || 'Demo' }}
+                    · {{ r.zoneCount }} areas
+                  </div>
+                </div>
+                <span class="chip">Open</span>
+              </button>
+            </div>
             <div v-else class="recent-list">
               <button
                 v-for="r in recent.slice(0, 6)"
@@ -634,7 +806,9 @@ const mediaSrc = computed(() => {
     <!-- Loading -->
     <div v-else-if="loading" class="card loading-panel">
       <div class="spinner" aria-hidden="true" />
-      <h2 class="upload-title" style="margin-bottom: 0.35rem">Analyzing field flight</h2>
+      <h2 class="upload-title" style="margin-bottom: 0.35rem">
+        {{ isDemo ? 'Loading demo analysis' : 'Analyzing field flight' }}
+      </h2>
       <p class="muted" style="margin: 0">
         {{ loadingCaption }}
       </p>
@@ -660,7 +834,9 @@ const mediaSrc = computed(() => {
     <template v-else-if="report">
       <div class="row row-between">
         <div style="min-width: 0">
-          <p class="section-label" style="margin-bottom: 0.35rem">Analysis complete</p>
+          <p class="section-label" style="margin-bottom: 0.35rem">
+            {{ demoResult ? 'Demo analysis' : 'Analysis complete' }}
+          </p>
           <h1 class="page-title" style="font-size: clamp(1.4rem, 2.5vw, 1.85rem)">
             {{ report.source.filename }}
           </h1>

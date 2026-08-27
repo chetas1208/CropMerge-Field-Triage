@@ -1,12 +1,16 @@
 <script setup lang="ts">
+import type { AppMode } from '~/composables/useDemoMode'
+
 const health = ref<{
   ok?: boolean
   db?: { ok?: boolean; mode?: string }
   vision?: { status?: string; device?: string; segmentationBackend?: string }
 } | null>(null)
 const { request } = useVisionApi()
+const { mode, isDemo, setMode, loadManifest } = useDemoMode()
 
 onMounted(async () => {
+  await loadManifest()
   try {
     const vision = await request<NonNullable<typeof health.value>['vision']>('/vision/health', {}, false)
     health.value = { ok: vision?.status === 'ok', vision }
@@ -15,8 +19,12 @@ onMounted(async () => {
   }
 })
 
-const visionOk = computed(() => health.value?.vision?.status === 'ok')
+const visionOk = computed(() => isDemo.value || health.value?.vision?.status === 'ok')
 const dbOk = computed(() => health.value?.db?.ok !== false)
+
+function chooseMode(next: AppMode) {
+  setMode(next)
+}
 </script>
 
 <template>
@@ -31,15 +39,33 @@ const dbOk = computed(() => health.value?.db?.ok !== false)
       </NuxtLink>
 
       <div class="topbar-right">
-        <span class="chip" :class="visionOk ? 'ok' : 'bad'" title="Vision engine">
+        <div class="mode-toggle" role="group" aria-label="Analysis mode">
+          <button
+            type="button"
+            class="mode-btn"
+            :class="{ active: !isDemo }"
+            @click="chooseMode('live')"
+          >
+            Live
+          </button>
+          <button
+            type="button"
+            class="mode-btn"
+            :class="{ active: isDemo }"
+            @click="chooseMode('demo')"
+          >
+            Demo
+          </button>
+        </div>
+        <span class="chip" :class="isDemo ? 'warn' : visionOk ? 'ok' : 'bad'" title="Vision engine">
           <span class="dot" />
-          Vision {{ visionOk ? 'online' : 'offline' }}
+          {{ isDemo ? 'Demo data' : `Vision ${health?.vision?.status === 'ok' ? 'online' : 'offline'}` }}
         </span>
         <span class="chip" :class="dbOk ? 'ok' : 'warn'" title="Product database">
           <span class="dot" />
           DB {{ health?.db?.mode || 'sqlite' }}
         </span>
-        <span v-if="health?.vision?.device" class="chip">
+        <span v-if="!isDemo && health?.vision?.device" class="chip">
           {{ health.vision.device }}
           <template v-if="health.vision.segmentationBackend">
             · {{ health.vision.segmentationBackend }}
